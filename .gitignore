@@ -1,0 +1,16 @@
+# Text files
+*.txt
+
+# PDF files
+*.pdf
+
+# Keep the main compiled PDF
+!docs/main.pdf
+
+# LaTeX auxiliary/generated files
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log

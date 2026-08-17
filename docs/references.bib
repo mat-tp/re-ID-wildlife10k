@@ -31,3 +31,163 @@
   year={2020},
   publisher={Elsevier}
 }
+
+% The actual DINOv2 paper. DINO (caron2021emerging, above) is the 2021 predecessor; DINOv2 is the
+% larger, later successor whose embeddings WildlifeReID-10k actually uses for its similarity graph.
+% These are two different papers and must be cited separately.
+@article{oquab2023dinov2,
+  title={DINOv2: Learning robust visual features without supervision},
+  author={Oquab, Maxime and Darcet, Timoth{\'e}e and Moutakanni, Th{\'e}o and Vo, Huy and Szafraniec,
+          Marc and Khalidov, Vasil and Fernandez, Pierre and Haziza, Daniel and Massa, Francisco and
+          El-Nouby, Alaaeldin and others},
+  journal={arXiv preprint arXiv:2304.07193},
+  year={2023}
+}
+
+% Earlier arXiv preprint of the WildlifeReID-10k paper, describing 30 constituent datasets and a
+% DBSCAN-based clustering step, later revised to single-linkage clustering in the camera-ready.
+@article{adam2024wildlifereidarxiv,
+  title={WildlifeReID-10k: Wildlife re-identification dataset with 10k individual animals},
+  author={Adam, Lukas and Cermak, Vojtech and Papafitsoros, Kostas and Picek, Lukas},
+  journal={arXiv preprint arXiv:2406.09211},
+  year={2024}
+}
+
+% Classic clustering survey, source for the general, long-recognised "chaining effect" weakness of
+% single-linkage clustering that we discuss in P2.
+@article{jain1999data,
+  title={Data clustering: a review},
+  author={Jain, Anil K and Murty, M Narasimha and Flynn, Patrick J},
+  journal={ACM Computing Surveys},
+  volume={31},
+  number={3},
+  pages={264--323},
+  year={1999},
+  publisher={ACM New York, NY, USA}
+}
+
+% Original HDBSCAN algorithm paper (density-based clustering built to be more chain-resistant than
+% single-linkage), one of two companion papers we cite for the method.
+@inproceedings{campello2013density,
+  title={Density-based clustering based on hierarchical density estimates},
+  author={Campello, Ricardo JGB and Moulavi, Davoud and Sander, Joerg},
+  booktitle={Pacific-Asia Conference on Knowledge Discovery and Data Mining},
+  pages={160--172},
+  year={2013},
+  organization={Springer}
+}
+
+% Extended journal version of the HDBSCAN algorithm paper above.
+@article{campello2015hierarchical,
+  title={Hierarchical density estimates for data clustering, visualization, and outlier detection},
+  author={Campello, Ricardo JGB and Moulavi, Davoud and Zimek, Arthur and Sander, Joerg},
+  journal={ACM Transactions on Knowledge Discovery from Data},
+  volume={10},
+  number={1},
+  pages={1--51},
+  year={2015},
+  publisher={ACM New York, NY, USA}
+}
+
+% The widely-used hdbscan software implementation paper, cited alongside the two algorithm papers
+% above whenever we refer to HDBSCAN as a candidate replacement for single-linkage clustering.
+@article{mcinnes2017hdbscan,
+  title={hdbscan: Hierarchical density based clustering},
+  author={McInnes, Leland and Healy, John and Astels, Steve},
+  journal={Journal of Open Source Software},
+  volume={2},
+  number={11},
+  pages={205},
+  year={2017}
+}
+
+% Source of the silhouette score, the label-free clustering-quality criterion we propose as an
+% automatic alternative to manual, per-dataset threshold selection.
+@article{rousseeuw1987silhouettes,
+  title={Silhouettes: a graphical aid to the interpretation and validation of cluster analysis},
+  author={Rousseeuw, Peter J},
+  journal={Journal of Computational and Applied Mathematics},
+  volume={20},
+  pages={53--65},
+  year={1987},
+  publisher={Elsevier}
+}
+
+% Source of the open-set evaluation framework (normalized accuracy / open-set f-measure) that
+% BAKS and BAUS, WildlifeReID-10k's own metrics, are built on.
+@article{mendes2017open,
+  title={Nearest neighbors distance ratio open-set classifier},
+  author={Mendes J{\'u}nior, Pedro R and de Souza, Roberto M and Werneck, Rafael de O and Stein,
+          Bernardo V and Pazinato, Daniel V and de Almeida, Waldir R and Penatti, Ot{\'a}vio A B and
+          Torres, Ricardo da S and Rocha, Anderson},
+  journal={Machine Learning},
+  volume={106},
+  number={3},
+  pages={359--386},
+  year={2017},
+  publisher={Springer}
+}
+
+% Survey of person re-identification methods, including unsupervised domain adaptation via
+% clustering-based pseudo-labelling and the noisy-pseudo-label weakness of hard cluster assignment
+% that we draw on when discussing P2/P3.
+@article{personreidsurvey,
+  title={Person re-identification: A retrospective on domain specific open challenges and future trends},
+  author={Kumar, S Anubha and Yaghoubi, Ehsan and Das, Abhijit and Harisha, BS and Proen{\c{c}}a, Hugo},
+  journal={Pattern Recognition},
+  volume={139},
+  pages={109422},
+  year={2023},
+  publisher={Elsevier}
+}
+
+% Transformer-era survey of re-identification (with a dedicated Animal Re-ID section) used to
+% situate WildlifeReID-10k within the broader, still-immature animal re-identification literature.
+@article{ye2025transformer,
+  title={Transformer for object re-identification: A survey},
+  author={Ye, Mang and Chen, Shuoyi and Li, Chenyue and Zheng, Wei-Shi and Crandall, David and Du, Bo},
+  journal={International Journal of Computer Vision},
+  year={2025},
+  publisher={Springer}
+}
+
+% Meta-Dataset, a large collection of datasets assembled for few-shot learning, used as a point of
+% comparison for how heterogeneity across constituent datasets can be handled during evaluation.
+@article{triantafillou2019meta,
+  title={Meta-dataset: A dataset of datasets for learning to learn from few examples},
+  author={Triantafillou, Eleni and Zhu, Tyler and Dumoulin, Vincent and Lamblin, Pascal and Evci,
+          Utku and Xu, Kelvin and Goroshin, Ross and Gelada, Carles and Swersky, Kevin and Manzagol,
+          Pierre-Antoine and others},
+  journal={arXiv preprint arXiv:1903.03096},
+  year={2019}
+}
+
+@inproceedings{cermak2024wildfusion,
+  title={Wildfusion: Individual animal identification with calibrated similarity fusion},
+  author={Cermak, Vojt{\v{e}}ch and Picek, Lukas and Adam, Luk{\'a}{\v{s}} and Neumann, Luk{\'a}{\v{s}} and Matas, Ji{\v{r}}{\'\i}},
+  booktitle={European Conference on Computer Vision},
+  pages={18--36},
+  year={2024},
+  organization={Springer}
+}
+
+@article{akbar2025body,
+  title={Body-part-based individual feral cat identification from camera trap images using deep learning},
+  author={Akbar, Rio Rifqi Syah and Rees, Matthew W and Fleming, Patricia A and Sohel, Ferdous},
+  journal={Ecological Informatics},
+  volume={90},
+  pages={103258},
+  year={2025},
+  publisher={Elsevier}
+}
+
+@article{vidal2021perspectives,
+  title={Perspectives on individual animal identification from biology and computer vision},
+  author={Vidal, Maxime and Wolf, Nathan and Rosenberg, Beth and Harris, Bradley P and Mathis, Alexander},
+  journal={Integrative and comparative biology},
+  volume={61},
+  number={3},
+  pages={900--916},
+  year={2021},
+  publisher={Oxford University Press}
+}
