@@ -4,7 +4,6 @@
 # PDF files
 *.pdf
 
-# Keep the main compiled PDF
 !docs/main.pdf
 
 # LaTeX auxiliary/generated files
@@ -14,3 +13,5 @@
 *.fdb_latexmk
 *.fls
 *.log
+
+*.zip

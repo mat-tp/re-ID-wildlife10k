@@ -1,535 +1,746 @@
-% This is samplepaper.tex, a sample chapter demonstrating the
-% LLNCS macro package for Springer Computer Science proceedings;
-% Version 2.21 of 2022/01/12
-%
 \documentclass[runningheads]{llncs}
 %
 \usepackage[T1]{fontenc}
 \usepackage{graphicx}
 \usepackage{amsmath}
+\usepackage{booktabs}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta,positioning,fit,backgrounds}
 %
 \begin{document}
 %
-\title{Evaluating and Improving Similarity-Aware Train-Test Splitting for Wildlife Re-Identification}
+\title{Calibrated Multi-Scale Similarity Fusion for Wildlife Individual Re-Identification on WildlifeReID-10k}
 %
-\titlerunning{Similarity-Aware Train-Test Splitting for Wildlife Re-Identification}
+\titlerunning{Calibrated Multi-Scale Similarity Fusion for Wildlife Re-Identification}
 %
 \author{Tshephang Matlala \inst{1} \and
 Kamohelo Lebjane \inst{1} \and
-Mogaladi Brilliant\inst{1}}
+Brilliant Mogaladi \inst{1}}
 %
 \authorrunning{T. Matlala et al.}
 %
-\institute{Academy of Computer Science and Software Engineering, University of Johannesburg, Johannesburg, South Africa}
+\institute{Academy of Computer Science and Software Engineering,
+\\University of Johannesburg, 
+\\Johannesburg, South Africa}
 %
-\maketitle              % typeset the header of the contribution
+\maketitle
 %
 \begin{abstract}
-Re-identifying an individual animal from an image is a task that remains difficult even for
-people, since two photographs of the same animal can look different depending on when, where,
-and under what lighting they were taken. The WildlifeReID-10k dataset was introduced to push
-research beyond simple species classification and towards the harder problem of individual
-re-identification, and its main contribution is a splitting methodology, a time-aware split where
-timestamps are available, and a similarity-aware split otherwise, that groups near-duplicate
-images together using single-linkage clustering on DINOv2 features and keeps whole groups on one
-side of the training/testing boundary. In this proposal we examine this splitting methodology in
-detail, including a documented revision to the algorithm between the dataset's preprint and its
-peer-reviewed camera-ready version, and identify several open questions worth investigating: how
-much the similarity-aware split actually recovers of the leakage-correction effect that the
-time-aware split achieves on datasets where both can be compared directly, whether the clustering
-step is vulnerable to the well-known chaining effect of single-linkage clustering, and whether the
-manually-chosen, per-dataset similarity threshold at its core can be replaced with something more
-principled and reproducible. We lay out both these problems and a concrete plan for investigating
-them.
 
-\keywords{Animal re-identification \and Wildlife re-identification \and WildlifeReID-10k
-        \and Clustering \and Single-linkage clustering \and Self-supervised learning \and DINOv2.}
+\keywords{Wildlife re-identification \and Similarity fusion
+        \and Similarity search \and MiewID \and MegaDescriptor.}
 \end{abstract}
-%
-%
 %
 \section{Introduction}
 
-Re-identification is the task of deciding whether two images show the same individual. For
-animals, this is a task that is difficult even for a person doing it by hand: telling apart two
-photographs of lions, for instance, is not simply a matter of skill, since the two photographs
-may have been taken at different times, in different locations, and under different lighting
-conditions, and any of these differences alone can make the same individual look like a
-different one. This is a fundamentally different problem from the one that datasets, such as
-ImageNet were built to address. ImageNet and similar datasets were built around classification
-and object detection, where the goal is to say \emph{what} is in an image (a lion, a bird, a
-turtle). Re-identification instead asks \emph{which} individual is in the image, so it requires a
-model to pick up on fine, individual specific detail rather than species level or category level
-detail.
+Wildlife individual re-identification (Re-ID) is the task of determining whether
+different images show the same individual animal. Unlike species classification,
+which asks what type of animal appears in an image, Re-ID asks which particular
+individual is shown. This distinction is important for wildlife monitoring
+because the same individual may appear differently across photographs due to
+changes in viewpoint, lighting, pose, body condition, or environment, while
+different individuals of the same species may have very similar appearances.
+Reliable individual identification is therefore a key requirement for
+long-term monitoring without physically tagging or repeatedly handling
+animals~\cite{vidal2021perspectives}.
 
-Beyond the difficulty of the task itself, being able to re-identify individual animals matters
-because it is what makes long-term animal tracking possible. If a specific individual can be
-recognised again in a later photograph, weeks or months after it was first seen, then it becomes
-possible to follow what has happened to that animal over time, which would otherwise require
-much more labour-intensive manual tracking~\cite{cermak2024wildfusion}. A concrete example of why
-this is useful: a conservationist who treats a sick or injured wild animal with medication wants
-to know afterwards whether the treatment actually worked, which means being able to find and
-recognise that same individual again in later camera-trap or survey images, rather than only
-being able to say that "some animal of this species" was seen again. The same reasoning applies to monitoring
-population size, tracking migration, and studying how individual animals respond to
-environmental change, all of which depend on reliably matching individuals across images taken at
-different times, and this is precisely why re-identification, rather than only classification, is
-the task that needs to be solved well.
+Traditional approaches to monitoring individual animals often rely on physical
+tags, collars, or other forms of identification. Although effective in some
+settings, these methods can be invasive, expensive, and difficult to apply
+consistently across many species and locations. Image-based Re-ID provides a
+less invasive alternative: once an individual has been photographed, later
+images can potentially be matched to that individual without additional
+capture or handling. This can support conservation applications such as
+population monitoring, estimating animal abundance, and studying changes in
+individuals over time~\cite{cermak2024wildfusion}.
 
-The WildlifeReID-10k dataset~\cite{adam2025wildlifereid} was introduced specifically to support
-this individual level task. In its peer-reviewed camera-ready form, it aggregates 37 existing
-wildlife re-identification datasets into a single, cleaned collection of 140,488 images of 10,772
-individuals across around 33 species, at a total size of only 26GB.\footnote{We note this
-explicitly because the dataset has a documented revision history that matters for this proposal:
-an earlier, June 2024 arXiv preprint of the same
-paper~\cite{adam2024wildlifereidarxiv} described a collection of 30 datasets (214,262 images) and
-used a different clustering algorithm for its splitting step, namely DBSCAN with a fixed maximal
-cluster size of 5. Between that preprint and the CVPR Workshop 2025 camera-ready
-version~\cite{adam2025wildlifereid} we cite throughout this proposal, the authors revised the
-splitting algorithm to the single-linkage clustering method with a manually-set per-dataset
-threshold described below. We treat this revision itself as relevant evidence: the fact that the
-authors moved away from their original DBSCAN-based approach suggests they encountered
-limitations with it worth understanding, even though our own investigation targets the current,
-published algorithm.} Beyond aggregation, its central methodological contribution is a way of
-splitting the data into training and testing sets that tries to avoid an easy trap: because many
-images come from the same encounter, the same camera session, or even the same video, a naive
-random split can place near-duplicate images on both sides of the split, which makes the
-re-identification task look artificially easy and inflates reported performance. WildlifeReID-10k's
-proposed fix has three steps. First, around 5\% of identities in each dataset are set aside
-entirely for open-set testing. Second, for the remaining identities, a \emph{time-aware split} is
-used wherever reliable timestamps are available: the oldest roughly 85\% of an individual's images
-go to training and the rest to testing, guaranteeing that images from the same encounter cannot
-end up on both sides. Third, since only 13 of the 37 constituent datasets have timestamps at
-all,\footnote{Of these 13, the paper itself excludes 4 (AmvrakikosTurtles, ReunionTurtles,
-StripeSpotter, ZakynthosTurtles) from its own time-aware split comparison due to too few images
-or encounters, so the head-to-head evaluation we build on in P4 (Table 6 and Figure 5 of the paper)
-actually compares 9 timestamped datasets against the remaining 28 without timestamps, not 13
-against 24. We use ``13 timestamped datasets'' loosely throughout this proposal to mean the set of
-datasets where timestamp metadata exists at all, and are precise about the smaller working set of 9
-wherever we describe experiments that reproduce or extend the paper's own time-aware comparison.}
-a \emph{similarity-aware split} is used everywhere else: images are embedded using
-DINOv2~\cite{oquab2023dinov2}, and for each identity, a graph is built where an edge connects two
-images if their cosine similarity exceeds a threshold $\theta$; the connected components of this
-graph (found using a Union-Find/disjoint-set structure, i.e.\ single-linkage clustering) become the
-clusters, and whole clusters are assigned to the training set, while the remaining, unclustered
-images are split between training and testing.
+However, reliable wildlife Re-ID remains difficult in unconstrained
+photographic collections. Images may contain substantial variation in
+background, viewpoint, illumination, image quality, and animal pose. In
+addition, individuals of the same species may have only subtle visual
+differences. These challenges become more pronounced in large heterogeneous
+benchmarks that combine images from different datasets, locations, and species.
+A representation that performs well on one collection may therefore fail to
+generalise to another.
 
-The fact that images come from many different sources also affects re-identification directly: some
-animals are photographed in the wild, under uncontrolled ground and background conditions, while
-others are photographed in controlled environments, such as zoos or rehabilitation
-centres~\cite{akbar2025body}. Because re-identification tends to be easier under controlled
-conditions, this difference in image source is itself a factor that any evaluation of the
-splitting methodology needs to account for.
+One possible way of addressing this problem is to use complementary visual
+representations rather than relying on a single descriptor. A global
+representation can capture broad characteristics such as body shape and
+morphology, while local features can capture fine-grained patterns such as
+spots, stripes, or other distinctive markings. A third, general-purpose visual
+representation may provide additional information that is not fully captured
+by either global morphology or local correspondences. The combination of these
+representations may therefore provide a more complete description of an
+individual animal than any one representation alone. Recent work on calibrated
+fusion has shown that combining global and local evidence can improve wildlife
+Re-ID performance~\cite{cermak2024wildfusion}, while more recent approaches
+have explored adding a third visual representation~\cite{kim2025animalclef}.
+This project investigates whether such complementary representations can
+provide consistent benefits at the scale and diversity of WildlifeReID-10k,
+which contains 140,488 images of 10,772 individuals across 37 source datasets
+and roughly 33 species~\cite{adam2025wildlifereid}. The project focuses on
+calibrated fusion of three types of visual evidence: a global wildlife
+individual descriptor, a complementary visual representation, and local
+keypoint-based evidence. MiewID and a fine-tuned MegaDescriptor are considered
+as alternative global representations, while EVA02 provides the complementary
+representation and ALIKED provides local matching evidence. Their contributions
+are evaluated individually and in combination to determine whether the
+representations contain complementary information for individual level retrieval.
 
-In this proposal, our interest is specifically in this splitting methodology, and in particular in
-the similarity-aware split, since it is the one applied to the large majority of the dataset's
-constituent sources. We set out below the problems we see with the current approach, review the
-related work that informs our proposed investigation, and describe the approach we intend to take.
+The project also considers whether the resulting fused representation remains
+effective when the system encounters individuals that were not observed during
+training. This is particularly important for wildlife monitoring because real
+populations are not fixed: new individuals may enter a monitored population,
+while previously observed individuals may disappear. The study therefore
+evaluates both closed-set and open-set Re-ID using the evaluation protocols
+provided by WildlifeReID-10k. In addition, because combining several
+representations increases the dimensionality and storage requirements of the
+resulting representation, the project investigates how much it can be
+compressed before individual-level retrieval performance begins to degrade.
+The main research objective is therefore to determine whether calibrated
+fusion of global, complementary, and local visual representations provides a
+more effective basis for wildlife individual Re-ID than individual
+representations alone, and to establish how well this approach generalises
+across the heterogeneous WildlifeReID-10k benchmark. The study further
+investigates the behaviour of the fused representation under open-set
+conditions and the extent to which it can be compressed while retaining
+individual discriminative information.
+
+The remainder of this proposal is organised as follows. Section~2 describes
+the problem addressed by the project and defines the research questions.
+Section~3 reviews the related work and identifies the research gap. Section~4
+presents the proposed methodology and evaluation strategy. Section~5
+justifies the proposed approach and summarises the expected contribution.
 
 \section{Problem Description}
 
-Our research is organised around four research questions, moving from whether the current
-similarity-aware split works, to whether it can be improved, to whether that improvement
-generalises and matters downstream:
+Wildlife individual re-identification becomes increasingly difficult as the
+number and diversity of images and individuals increase. WildlifeReID-10k
+provides a suitable setting for studying this problem because it combines
+140,488 images of 10,772 individuals from 37 source datasets and approximately
+33 species~\cite{adam2025wildlifereid}. Unlike a small, single-species
+collection, this benchmark contains substantial variation in animal
+appearance, image quality, photographic conditions, and the number of images
+available for each individual. A method that performs well on one subset of
+the data may therefore not necessarily generalise to the wider benchmark.
 
-\begin{quote}
-\emph{RQ1.} How effectively does the similarity-aware split prevent train-test leakage, compared
-with the time-aware split, on the datasets where both can be computed and compared directly?
+A major difficulty is learning individual-specific information without
+relying on incidental visual information. Wildlife images are often captured
+in natural environments where backgrounds, lighting, vegetation, terrain, and
+camera viewpoints vary considerably. If a representation relies too heavily
+on these factors, it may associate an individual with the environment in
+which it was photographed rather than with characteristics of the animal
+itself. Animal detection and cropping can reduce this risk by focusing the
+subsequent representation on the animal, but the resulting representation
+must still retain sufficiently detailed information to distinguish individuals
+that may have very similar appearances.
 
-\emph{RQ2.} Can alternative threshold-selection and clustering strategies improve the reliability
-of the similarity-aware split relative to the current manually-tuned single-linkage method?
+This difficulty is closely related to the limitations of relying on a single
+visual representation. Global descriptors can capture broad characteristics
+such as body shape and morphology, but may not fully represent small,
+spatially localised differences between individuals. Local matching methods
+can provide evidence from distinctive patterns such as spots, stripes, or
+scars, but their matching behaviour differs from that of fixed-length global
+embeddings. A general-purpose visual representation may provide additional
+information that is not captured by either global morphology or local
+correspondences. It is therefore necessary to determine whether these
+different forms of visual evidence contain complementary information that can
+be combined effectively, rather than assuming that a single representation is
+sufficient for individual-level identification.
 
-\emph{RQ3.} Does a split methodology developed and validated on the 13 timestamped datasets
-remain reliable when deployed on the 24 datasets that have no timestamps to validate it against?
+The problem is further complicated when the system encounters individuals
+that were not observed during training. In a conventional closed-set setting,
+the identities evaluated at test time are assumed to be represented in the
+training data. The system can therefore select the most similar known
+identity from a fixed set of candidates. In an open-set setting, this
+assumption is relaxed: a query may belong to an individual that was not
+observed during training. The system must consequently distinguish between a
+sufficiently strong match to a known individual and a query for which no
+known identity should be assigned. This setting is particularly relevant to
+wildlife monitoring because populations are not static and new individuals
+may appear over time.
 
-\emph{RQ4.} How do improvements in split reliability, and training-time data augmentation applied
-within the resulting splits, affect downstream open-set and closed-set wildlife re-identification
-performance?
-\end{quote}
+These settings can be expressed formally. In the closed-set case, the test
+identities are contained within the identities available during training,
+\[
+ID_{\mathrm{test}} \subseteq ID_{\mathrm{train}}.
+\]
+In the open-set case, at least some evaluated identities are absent from the
+training identities,
+\[
+ID_{\mathrm{test}} \not\subseteq ID_{\mathrm{train}}.
+\]
+The open-set problem therefore requires not only ranking candidate identities
+but also determining whether the similarity to the best candidate is
+sufficiently strong to accept that identity.
 
-These four questions correspond to four hypotheses we intend to test:
+WildlifeReID-10k also presents substantial variation in the number of images
+available for different individuals. Some individuals are represented by many
+images, while others have very few observations. A single pooled accuracy
+value may therefore provide an incomplete picture of performance because
+frequently observed individuals can contribute disproportionately to the
+overall result. The benchmark's evaluation protocols and BAKS and BAUS
+metrics provide a way of assessing performance while accounting for this
+variation~\cite{adam2025wildlifereid,mendes2017open}. Using these benchmark
+metrics also allows the proposed approach to be evaluated under the same
+conditions as other methods developed for WildlifeReID-10k.
 
-\begin{quote}
-\emph{H1.} The current similarity-aware split does not fully reproduce the leakage-correction
-effect that the time-aware split achieves on the same, timestamped datasets.
+Taken together, these factors motivate the central problem addressed by this
+project: \emph{whether multiple complementary visual representations can be
+calibrated and fused to provide more reliable individual-level wildlife
+Re-ID than any single representation alone, while remaining effective for
+unseen identities and across the heterogeneous data represented in
+WildlifeReID-10k.}
 
-\emph{H2.} Single-linkage clustering produces chained clusters containing image pairs whose
-direct pairwise similarity falls substantially below the clustering threshold $\theta$.
+The project consequently investigates four related questions: (i) whether
+MiewID or a fine-tuned MegaDescriptor provides the stronger global
+representation on WildlifeReID-10k; (ii) whether combining the selected
+global representation with EVA02 and ALIKED provides additional
+individual-discriminative information compared with the individual
+representations alone; (iii) whether the resulting fused representation
+remains effective under the benchmark's open-set evaluation, where some
+identities are not observed during training; and (iv) how much the fused
+representation can be compressed before its individual-level retrieval
+performance begins to degrade.
 
-\emph{H3.} Automatic threshold selection and/or chain-resistant clustering methods produce higher
-cluster quality, measured against timestamp agreement, than the current manually-tuned
-single-linkage method.
-
-\emph{H4.} Split-quality improvements validated on the 13 timestamped datasets, together with
-training-only data augmentation, produce more reliable downstream Re-ID evaluation once deployed
-across the full, heterogeneous WildlifeReID-10k collection.
-\end{quote}
-
-We break this down into seven concrete problems with the current methodology, grouped under the
-three limitations these hypotheses target: threshold selection (P1), clustering robustness (P2,
-P3), and validation/generalisation (P4, P5), plus two supporting concerns, imbalance (P6) and
-per-dataset heterogeneity (P7), that we treat as secondary to the central splitting problem.
-
-Before setting out these seven problems, we want to be precise about what we mean by ``leakage,''
-since the term is used loosely in the paper and conflating its senses would weaken our own
-experimental claims. We distinguish three related but distinct notions: \emph{image-level} leakage,
-where near-identical images (for instance, consecutive video frames) appear on both sides of the
-split; \emph{encounter-level} leakage, where images from the same observation event appear on both
-sides even if no two images are near-duplicates; and \emph{identity-level} leakage, where the same
-individual appears in both training and testing. These are not interchangeable. In closed-set
-re-identification, identity-level overlap between train and test is expected and necessary, since
-the task is precisely to recognise known individuals again; it is not leakage in the harmful sense.
-Image- and encounter-level leakage, however, can make the benchmark artificially easy regardless of
-the evaluation protocol, because the model may be relying on incidental cues (the same background,
-the same lighting, the same pose) rather than on identity-discriminative features.
-WildlifeReID-10k's splitting methodology is aimed squarely at removing image- and encounter-level
-leakage, and this is the sense in which we use the term throughout this proposal unless stated
-otherwise.
-
-Relatedly, we adopt the following formal distinction between the two evaluation protocols the
-paper (and our proposal) reports results under. In the \emph{closed-set} protocol, every identity
-that appears in the test set also appears in the training set, $ID_{\text{test}} \subseteq
-ID_{\text{train}}$, and the model's task is to identify the individual among a fixed set of known
-identities. In the \emph{open-set} protocol, some test identities are deliberately withheld from
-training, $ID_{\text{test}} \not\subseteq ID_{\text{train}}$, and the model must additionally
-decide whether a query corresponds to a known identity at all, rather than being forced to pick the
-closest match among known individuals. Open-set evaluation is precisely where correct split
-construction matters most, since if a withheld identity's images leak into training through an
-image- or encounter-level near-duplicate, the identity is no longer genuinely unseen, and the
-open-set protocol silently degrades back into a closed-set one for that individual.
-
-P1: the similarity threshold is manually chosen, and this is only validated on a small,
-favourable subset of the data. WildlifeReID-10k's clustering step depends entirely on a cosine
-similarity threshold $\theta$ that decides which images count as near-duplicates. The paper
-reports that a single global threshold ($\theta = 0.97$) found 5,601 true-positive duplicate pairs
-against 685 false positives on the datasets with timestamps, but that manually choosing a
-different threshold for each dataset, based on visual inspection, improved this substantially, to
-8,206 true positives against only 464 false positives, and this manual, per-dataset approach is
-what was actually used for the datasets without timestamps. This raises two separate concerns.
-First, "based on visual inspection" is not a documented, repeatable procedure; different people
-inspecting the same clusters could plausibly choose different thresholds, and the paper does not
-report what values were chosen for which datasets or how sensitive the results are to that choice.
-Second, and more importantly, this manual tuning is only checked against ground truth on the 13
-datasets that have timestamps. For the remaining 24 datasets, which have no timestamps at all,
-there is no way, even in principle, to verify whether the manually-chosen threshold is any good,
-since there is no ground truth to compare it against. The manual method's advantage over the
-single global threshold is demonstrated only where it can be checked, and then applied on faith
-everywhere else.
-
-P2: single-linkage clustering is structurally vulnerable to the chaining effect. The clustering
-step is not, in fact, DBSCAN, as an earlier preprint of this paper described; it is single-linkage
-clustering, implemented via connected components over a similarity graph. This is a different
-algorithm with a different, well-documented weakness. Single-linkage clustering builds clusters by
-transitively connecting any two points reachable through a chain of pairwise similarities above
-the threshold, so if image A is similar enough to image B, and image B is similar enough to image
-C, then A and C are placed in the same cluster even if A and C are not similar to each other at
-all. This is a long-recognised limitation of single-linkage clustering in the general clustering
-literature, commonly called the chaining effect~\cite{jain1999data}. In the context of
-WildlifeReID-10k, this matters because a long, gradually-changing sequence of images from a single
-encounter (an animal slowly turning, walking away, or moving in and out of shadow) is exactly the
-kind of chain that could merge visually very different images of the same individual into one
-oversized cluster, an outcome that could quietly inflate the size of the training-only cluster
-bucket well beyond genuine near-duplicates, without ever being flagged as a false positive under
-the paper's own quality metric, since that metric only checks whether a cluster's images share the
-same timestamp, not whether every pair of images inside the cluster is actually similar to every
-other pair.
-
-P3: the cluster assignment is still a hard, binary decision. Despite the change in the underlying
-clustering algorithm, the fundamental character of the decision it produces has not changed: an
-image either belongs to a cluster or it does not, with no accompanying measure of confidence. The
-paper's own Table 3 shows that cluster purity (the share of a cluster's images sharing a single
-timestamp) degrades as clusters grow larger, from 97.5\% for clusters of size 2 down to 77.4\% for
-clusters of size 6 or more, which means that for the largest clusters, roughly one in five images
-placed inside them may not actually belong to the same encounter as the rest, yet every image
-inside the cluster is treated identically once it is assigned.
-
-P4: the similarity-aware split recovers far less of the leakage-correction effect than the
-time-aware split does, on the paper's own evidence. This is, in our view, the most important open
-question raised by the paper's own results. The paper's Table 6 reports performance on the
-MiewID foundation model under four conditions: on the datasets that have timestamps, moving from a random
-split to a time-aware split closes a 12.3-point gap in closed-set accuracy (81.5\% to 69.2\%) and a
-16.7-point gap in open-set performance (72.6\% to 55.9\%). But on the datasets without timestamps,
-moving from a random split to the similarity-aware split closes only a 1.5-point gap in closed-set
-accuracy (80.8\% to 79.3\%) and a 2.5-point gap in open-set performance (66.1\% to 63.6\%). The
-paper's own introduction explicitly frames the similarity-aware split as an extension of the
-time-aware split, meant to approximate its effect when timestamps are unavailable. If that is the
-intended relationship, this gap is difficult to reconcile: the similarity-aware split therefore
-appears to recover substantially less of the performance correction observed under the time-aware
-split. This could mean that the similarity-aware split is only catching a small fraction
-of genuine same-encounter leakage, or it could mean that the underlying datasets without
-timestamps are simply different in other ways, but the paper's experiments do not separate these
-two explanations, since split type and dataset group always co-vary in this comparison.
-
-P5: cluster quality can only be checked where it is least needed. The paper's true-positive/
-false-positive validation framework (Section 3.3 of the paper) can only be computed on datasets
-that have timestamps, because it needs a timestamp to check whether a cluster's images were really
-taken together. This means cluster quality is verified only on the 13 datasets that already have a
-better option available to them, the time-aware split, while the 24 datasets that actually depend
-on the similarity-aware split for their entire leakage protection have no way of confirming that
-their clusters are any good.
-
-P6: the dataset is heavily imbalanced, and this is entangled with the wild-versus-controlled
-question. WildlifeReID-10k is heavily imbalanced across species and individuals, for example
-roughly 52,000 bird images spread across only 50 individuals against roughly 21,500 sea turtle
-images spread across 2,703 individuals, and this imbalance is not evenly distributed by capture
-condition either: about 50\% of individuals in the dataset were observed in the wild (71\%
-including rehabilitation centres), and re-identification tends to be noticeably easier in
-controlled, good-lighting conditions than it is in the wild, which the paper's own per-dataset
-results reflect, since the best-performing datasets are mostly from controlled environments and
-the worst-performing ones are mostly from the wild. This raises a question we want to investigate
-directly: can data augmentation be used to help balance the dataset, so that species and
-individuals with very few images are not simply left underrepresented, and does augmentation
-narrow the gap between wild and controlled-environment performance, or does it mainly help the
-already better-performing controlled-environment datasets.
-
-P7: aggregate metrics can hide how differently a method performs across the 37 source datasets.
-WildlifeReID-10k is a combination of 37 separate constituent datasets, each collected with a
-different camera, at a different image resolution, and under different environmental conditions,
-and each contributing very different numbers of images and individuals to the whole. The paper
-does report a per-dataset breakdown of BAKS for its baseline models (its Figure 4), which is a good
-existing practice, but this breakdown is not extended to the clustering step itself: we do not know
-whether the similarity-aware split's clusters are good on some source datasets and poor on others,
-only that the aggregate 76.1\%-style purity figures (now the Table 3 purity breakdown) hold
-\emph{averaged} over the 13 timestamped datasets. We are therefore interested in extending this
-per-dataset lens specifically to cluster quality, not just to downstream model performance.
+These questions define the scope of the research. The core investigation is
+the representation and evaluation of calibrated multi-scale feature fusion.
+The research pipeline therefore focuses only on the core research stages,
+from visual representation and score calibration through fusion, compression,
+retrieval, and evaluation.
 
 \section{Related Work}
 
-\emph{Self-supervised vision transformers (DINO and DINOv2).} The clustering step used to build
-the similarity-aware split depends entirely on the quality of the image features it clusters, so
-the feature extractor itself is directly relevant related work, and it is important to keep two
-different papers distinct here. DINO~\cite{caron2021emerging} (2021) introduced a self-distillation
-approach for training vision transformers with no labels at all: a student network learns to match
-the representations a teacher network produces for a different augmented view of the same image,
-rather than being trained with human-provided labels; the teacher shares the student's architecture
-but is never updated by gradient descent, instead tracking an exponential moving average of the
-student's weights, and collapse (both networks trivially agreeing on a constant output) is avoided
-through centering and sharpening rather than any contrastive loss. This is self-distillation in
-DINO's specific sense, a student matching a teacher's representations under augmentation, and
-should not be confused with conventional knowledge distillation, which transfers a large model's
-predictions into a smaller model. The property of DINO that matters most for our proposal is that
-its self-supervised features cluster visually similar images together well, and its attention maps
-naturally highlight object regions without ever being told to. DINOv2~\cite{oquab2023dinov2}
-(2023) is DINO's larger, later successor: it scales the same self-distillation idea to a bigger
-curated dataset and model size and produces stronger, more general-purpose visual features. It is
-specifically DINOv2, not the original DINO, whose embeddings WildlifeReID-10k uses to build its
-similarity graph, and DINOv2 features are also what the paper uses directly as one of the tools to
-sanity-check the quality of the clustering itself.
+Wildlife individual re-identification has developed from
+species-specific identification systems towards more general
+multi-species representations. This development has been driven by the
+increasing availability of wildlife imagery and by advances in
+large-scale visual representation learning. WildlifeReID-10k reflects this
+development by bringing together images from 37 source datasets and providing
+both closed-set and open-set evaluation protocols designed to reduce
+information leakage between training and testing data~\cite{adam2025wildlifereid}.
+The following work is therefore relevant to this project because it
+establishes the progression from general-purpose visual representations to
+wildlife-specific descriptors and, more recently, to calibrated fusion of
+multiple complementary representations.
 
-\emph{Face re-identification (SurvFace).} Cheng et al.~\cite{cheng2020face} study a closely
-related re-identification problem in a different domain, introducing SurvFace, a benchmark for
-face re-identification built by mining face crops out of 17 existing person re-identification
-datasets rather than collecting new data. The paper draws a distinction that maps directly onto
-our own problem: standard face recognition models are trained and tested on clean, cooperative,
-high-resolution web photographs, while surveillance-style face re-identification must work with
-uncontrolled, low-resolution, poorly lit images, and models trained only on the former generalise
-surprisingly poorly to the latter. SurvFace also uses the same closed-set/open-set distinction that
-WildlifeReID-10k uses, and its metrics (FPIR, FNIR, TPIR@FPIR for open-set; CMC and rank-1 for
-closed-set) are not directly reused in WildlifeReID-10k. This is not because they would be
-technically inapplicable to animals, but because they assume a small watch-list style search and
-do not correct for severe class imbalance, whereas WildlifeReID-10k's BAKS/BAUS metrics were
-designed specifically to handle the extreme imbalance present in wildlife data. This is a useful,
-concrete illustration of a point that recurs throughout this proposal: the choice of evaluation
-metric should follow the shape of the underlying data.
+\emph{General-purpose visual representations.}
+Self-supervised vision transformers provide a useful starting point for
+learning visual representations without requiring task-specific labels.
+DINO~\cite{caron2021emerging} introduced a self-distillation framework in
+which different augmented views of an image are encouraged to produce
+consistent representations. DINOv2~\cite{oquab2023dinov2} extended this
+approach through larger-scale and more carefully curated training data,
+producing general-purpose visual features that transfer across many visual
+tasks. In wildlife Re-ID, such general-purpose representations provide
+useful baselines because they can encode visual information without having
+been trained specifically to identify individual animals. However, their
+general visual training does not directly optimise the fine-grained
+individual-specific distinctions required by wildlife Re-ID. This motivates
+the development and comparison of representations trained specifically for
+animal identification.
 
-\emph{Clustering-based pseudo-labelling and hard cluster assignment (Person Re-ID survey).}
-Kumar et al.~\cite{personreidsurvey} survey supervised and unsupervised techniques for person
-re-identification, a problem that is structurally the same as animal re-identification: given a
-query image, retrieve the matching identity from a gallery of candidates. Two parts of this survey
-are particularly relevant to our proposal. First, unsupervised domain adaptation methods generate
-pseudo-labels through clustering algorithms such as DBSCAN or $k$-means, which confirms that
-clustering-based pseudo-labelling in general, not any one specific algorithm, is a standard tool
-across this wider literature. Second, and more directly relevant to WildlifeReID-10k's current
-algorithm, this survey identifies noisy pseudo-labels as a general weakness of hard,
-clustering-based assignment, arising both from domain gaps between source and target data and from
-the coarse, all-or-nothing nature of the assignment itself, regardless of which clustering
-algorithm produces it. Soft pseudo-labelling, where a probability of cluster membership is used
-instead of a binary in/out label, is proposed in this literature as the fix, and this remains a
-nuance that WildlifeReID-10k's current single-linkage clustering step does not explore, since
-connected components are, by construction, a hard partition.
+\emph{Wildlife-specific global representations.}
+WildlifeDatasets and the associated MegaDescriptor model represent an
+important step towards general-purpose wildlife Re-ID. Cermak et
+al.~\cite{cermak2024wildlifedatasets} introduced WildlifeDatasets as an
+open-source framework for organising wildlife Re-ID datasets and training
+models across multiple species. MegaDescriptor was developed as a
+wildlife-specific foundation model for individual animal Re-ID, providing a
+strong baseline against which more specialised approaches can be compared.
+The WildlifeReID-10k benchmark also uses MegaDescriptor as a baseline,
+reinforcing its relevance to large-scale multi-species evaluation. The
+benchmark itself was introduced partly to address the limitations of
+evaluating wildlife Re-ID on small, isolated datasets and to provide
+similarity-aware splits that reduce leakage from visually similar images
+appearing across training and test sets~\cite{adam2025wildlifereid}.
 
-\emph{Chaining effect and alternatives to single-linkage clustering.} The specific weakness we
-raise in P2, that single-linkage clustering (which is what WildlifeReID-10k's connected-components
-procedure implements) is prone to transitively merging dissimilar points through an unbroken chain
-of intermediate similarities, is a long-established result in the clustering literature, going back
-to early critiques of the method and surveyed in general terms by Jain et
-al.~\cite{jain1999data}. A variety of fixes have been proposed for this specific weakness over the
-years, most of them built around the idea of using local density to break spurious chains before
-they can form, filtering out low-density bridging points before running single-linkage, rather than
-using the raw similarity graph directly. This body of work is directly relevant to our proposed
-approach below, since density-adaptive clustering methods such as
-HDBSCAN~\cite{campello2013density,campello2015hierarchical} were developed partly to address this
-exact failure mode in a principled way.
+MiewID provides another wildlife-specific global representation.
+Otarashvili et al.~\cite{otarashvili2024miewid} proposed MiewID as a
+multi-species individual identification model based on an EfficientNetV2
+backbone and an angular-margin training objective. Its multi-species
+training and reported generalisation to species outside its training data
+make it a relevant alternative to MegaDescriptor. Since MiewID and
+MegaDescriptor provide different approaches to learning global
+individual-level representations, there is no need to assume beforehand
+that one is universally superior. This project therefore compares them on
+the same WildlifeReID-10k evaluation setting before selecting the global
+representation used in the proposed fusion.
 
-\emph{Automatic threshold and cluster-count selection.} The manual, per-dataset threshold
-tuning we raise in P1 has a long-standing automatic alternative in the general clustering
-literature: the silhouette score~\cite{rousseeuw1987silhouettes}, which measures, for each point,
-how much more similar it is to its own cluster than to the next closest cluster, and can be
-averaged across all points to score a candidate clustering without needing any ground-truth labels.
-Because it requires no labels, it is exactly the kind of automatic criterion that could replace
-visual inspection when choosing $\theta$ per dataset, and it is widely used elsewhere for this
-purpose in unsupervised settings where, as in WildlifeReID-10k's 24 datasets without timestamps,
-no ground truth is available to validate the choice directly.
+\emph{Global and local feature fusion.}
+Although wildlife-specific global descriptors provide strong individual
+representations, they may not capture every fine-grained visual difference
+between two individuals. Local feature matching provides a complementary
+source of evidence by comparing spatially localised patterns between images.
+WildFusion~\cite{cermak2024wildfusion} addresses this problem by combining
+global similarity with local keypoint-based matching. Rather than directly
+averaging raw scores, WildFusion calibrates the different similarity
+measures before combining them, allowing global and local evidence to
+contribute on a common scale.
 
-\emph{Transformer-based re-identification and animal re-identification benchmarks.} Ye et
-al.~\cite{ye2025transformer} provide a transformer-era follow-up to the Person Re-ID survey above,
-and its Animal Re-ID section is the most directly relevant part of the related work to our
-proposal. This section confirms that animal re-identification, as a field, is still immature
-compared to person or vehicle re-identification, with unclear task boundaries, species-specific
-methods that do not transfer well across species, and inconsistent experimental protocols across
-papers, which is essentially the same gap that motivated WildlifeReID-10k's own creation. In the
-same section, the authors also confirm that clustering-based pseudo-labelling remains the default
-approach for unsupervised re-identification even in transformer-based pipelines, which reinforces
-that the general weaknesses of hard, clustering-based assignment we describe above are a live,
-general methodological gap rather than something specific to wildlife data.
+This calibration step is particularly important because global embedding
+similarities and local matching scores have different numerical
+distributions. WildFusion therefore provides the methodological basis for
+the fusion strategy investigated in this project. Its results demonstrate
+that calibrated global-local fusion can improve wildlife Re-ID performance
+over individual global representations, supporting the hypothesis that
+different visual representations can contain complementary identity
+information~\cite{cermak2024wildfusion}.
 
-\emph{Open-set evaluation under class imbalance.} Mendes J\'unior et al.~\cite{mendes2017open}
-propose an open-set classifier together with normalized accuracy and open-set F-measure, evaluation
-criteria designed to remain meaningful when the number of examples per class is highly uneven.
-BAKS and BAUS, the two metrics WildlifeReID-10k reports throughout, are themselves built on this
-line of work, which matters for our proposal because every one of our proposed experiments (P1--P7)
-is run over a collection whose constituent datasets vary by orders of magnitude in size and where
-naively-averaged accuracy would be dominated by whichever few datasets happen to be largest.
+\emph{Multi-representation fusion.}
+More recent work has extended global-local fusion by introducing a third
+visual representation. Kim et al.~\cite{kim2025animalclef} combined
+MegaDescriptor, ALIKED, and EVA02 for the AnimalCLEF 2025 individual animal
+Re-ID challenge. MegaDescriptor provided global visual features, ALIKED
+provided local keypoint-based matching, and EVA02 supplied an additional
+visual representation. The three components were combined using
+WildFusion-style score calibration followed by weighted fusion. This work
+provides direct motivation for the three-representation configuration
+investigated in this project.
 
+However, the role of the third representation should not be assumed to be
+beneficial simply because it improves performance in one challenge setting.
+The important research question is whether the additional representation
+continues to provide complementary information when evaluated on a larger
+and more heterogeneous benchmark. In particular, it remains necessary to
+compare the fused system against its individual components under a common
+evaluation protocol and determine whether the observed improvement is
+consistent across the different species and source datasets represented in
+WildlifeReID-10k.
+
+\emph{Open-set wildlife re-identification.}
+Open-set recognition is particularly important for wildlife Re-ID because
+a deployed system cannot assume that every future observation belongs to an
+individual previously registered in its database. WildlifeReID-10k
+explicitly addresses this issue by providing open-set evaluation in addition
+to closed-set evaluation. Its similarity-aware split was introduced to
+reduce the effect of visually similar images appearing in both training and
+testing data, which can otherwise lead to overly optimistic estimates of
+Re-ID performance~\cite{adam2025wildlifereid}.
+
+The importance of open-set evaluation is also reflected in AnimalCLEF.
+AnimalCLEF 2025 uses an open-set formulation in which the system must
+determine both whether the query individual exists in the database and, when
+it does, which identity it corresponds to~\cite{turn0search30}. These
+benchmarks demonstrate that wildlife Re-ID should not be evaluated only as
+closed-set classification. A representation intended for practical
+monitoring must also be able to reject sufficiently dissimilar queries
+rather than assigning every query to a known identity.
+
+\emph{Balanced evaluation across individuals.}
+Wildlife datasets are often highly imbalanced because some individuals are
+photographed much more frequently than others. This creates a problem for
+standard pooled accuracy measures, which can allow frequently observed
+individuals to dominate the evaluation. WildlifeReID-10k therefore provides
+balanced evaluation measures for known and unknown identities, including
+BAKS and BAUS, to provide a more informative assessment under its open-set
+setting~\cite{adam2025wildlifereid}. These metrics are particularly relevant
+to this project because the objective is not merely to improve performance
+on frequently represented individuals, but to determine whether the fused
+representation remains useful across the diverse identities represented in
+the benchmark.
+
+\emph{Representation compression and similarity retrieval.}
+A multi-representation approach increases the amount of information that
+must be stored and compared for each image. This introduces a secondary
+practical question: how much of the resulting representation is necessary
+to retain its individual-discriminative information? Principal Component
+Analysis (PCA)~\cite{jolliffe2002pca} provides a standard approach for
+reducing the dimensionality of high-dimensional representations while
+retaining directions of greatest variance. However, the directions with
+highest overall variance are not necessarily those that best distinguish
+individual animals. Compression must therefore be evaluated empirically
+rather than assumed to preserve individual identity information.
+
+Similarity retrieval also becomes increasingly expensive as the gallery
+grows. Approximate nearest-neighbour methods such as locality-sensitive
+hashing (LSH)~\cite{indyk1998lsh} can reduce the number of comparisons
+required during retrieval. In this project, however, retrieval efficiency
+is treated as a supporting consideration rather than the primary research
+objective. The main question is whether compression can reduce the
+representation size while retaining individual-level retrieval performance.
+
+\emph{Resulting research gap.}
+The existing literature establishes several important foundations for this
+project. General-purpose representations such as DINOv2 provide strong
+visual baselines, while wildlife-specific models such as MegaDescriptor and
+MiewID are designed specifically for individual animal identification.
+WildFusion demonstrates that calibrated fusion of global and local evidence
+can improve wildlife Re-ID, and the AnimalCLEF 2025 work demonstrates that a
+third representation, EVA02, can be incorporated into a similar fusion
+framework~\cite{cermak2024wildlifedatasets,cermak2024wildfusion,
+otarashvili2024miewid,kim2025animalclef}.
+
+What remains less clear is whether this multi-representation approach
+provides consistent individual-level benefits when evaluated at the full
+scale and diversity of WildlifeReID-10k. In particular, it is not yet clear
+whether the complementary information from global, local, and additional
+visual representations remains useful across the benchmark's different
+species and source datasets, whether the resulting representation remains
+effective when identities are unseen during training, and how much of the
+fused representation can be removed through dimensionality reduction before
+individual-level discrimination begins to deteriorate. These questions
+motivate the proposed evaluation of calibrated fusion using MiewID or
+fine-tuned MegaDescriptor as the global representation, EVA02 as a
+complementary visual representation, and ALIKED as the local representation
+under WildlifeReID-10k's benchmark protocols.
 
 \section{Proposed Approach}
 
-Our proposed approach is a single pipeline, applied identically to all 37 constituent datasets:
-images are optionally augmented, embedded with DINOv2, compared via cosine similarity, clustered,
-and split into training and testing sets. Timestamp availability plays no role in this pipeline
-itself; the same augmentation, feature extraction, similarity, and clustering steps run regardless
-of whether a given dataset happens to have timestamps. Timestamps are used only afterward, as a
-validation signal: for the subset of datasets where timestamps exist, we can check the resulting
-clusters against them to see whether the pipeline is behaving sensibly, in the same way the
-original paper does. This keeps the method itself general-purpose and deployable everywhere, while
-still letting us sanity-check it wherever a check happens to be possible.
-
-Figure~\ref{fig:pipeline} summarises this pipeline. It is a single, linear sequence of six steps,
-augmentation, DINOv2 feature extraction, similarity comparison, clustering, splitting, and
-evaluation, run the same way for all 37 datasets. Timestamp checking is not one of these six steps.
-It is a separate validation check, shown below the main sequence in the figure, that we apply
-afterwards to see how well the clustering step worked, and only where timestamps happen to exist.
+Figure~\ref{fig:pipeline} presents the proposed research methodology. The methodology focuses only
+on the core research process used to investigate multi-scale feature fusion for wildlife individual
+re-identification. WildlifeReID-10k images are first prepared through animal detection and cropping.
+The cropped images are then processed using complementary visual representations: a global
+wildlife-specific descriptor, a general visual descriptor, and a local keypoint-based descriptor.
+Their similarity scores are calibrated before being combined through weighted fusion. The resulting
+fused representation is subsequently evaluated for compression, similarity retrieval, and
+closed-set and open-set re-identification. The methodology is designed to determine whether combining
+different forms of visual evidence provides more reliable individual-level discrimination than using
+a single representation.
 
 \begin{figure}[t]
 \centering
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[
-  node distance=8mm and 10mm,
-  box/.style={draw, rounded corners, align=center, minimum height=7mm, inner sep=2pt, font=\scriptsize},
+  node distance=7mm and 8mm,
+  box/.style={
+    draw,
+    rounded corners,
+    align=center,
+    minimum height=7mm,
+    inner sep=2pt,
+    font=\scriptsize
+  },
   data/.style={box, fill=gray!12},
   pstage/.style={box, fill=blue!8},
-  split/.style={box, fill=orange!12},
-  eval/.style={box, fill=green!12},
+  model/.style={box, fill=orange!12},
+  evalb/.style={box, fill=green!12},
   arr/.style={-{Stealth[length=1.6mm]}, thin}
 ]
 
-\node[data] (raw) {WildlifeReID-10k\\37 datasets};
-\node[pstage, right=of raw] (aug) {V5: augmentation};
-\node[pstage, right=of aug] (dino) {DINOv2 features};
-\node[pstage, right=of dino] (sim) {Similarity graph\\(V1: threshold)};
-\node[pstage, right=of sim] (clust) {Clustering (V2)};
-\node[split, right=of clust] (splitn) {Train/Test split};
-\node[eval, right=of splitn] (reid) {Re-ID\\evaluation};
+\node[data] (raw) {WildlifeReID-10k\\140,488 images};
+\node[pstage, right=of raw] (crop) {Animal detection\\and cropping};
+\node[pstage, right=of crop] (global) {Global\\representation};
+\node[pstage, right=of global] (semantic) {Complementary\\representation};
+\node[pstage, right=of semantic] (local) {Local\\representation};
+\node[pstage, right=of local] (cal) {Score\\calibration};
+\node[model, right=of cal] (fusion) {Multi-scale\\fusion};
+\node[model, right=of fusion] (pca) {PCA\\compression};
+\node[evalb, right=of pca] (retrieval) {Similarity\\retrieval};
+\node[evalb, below=8mm of retrieval] (evaluation)
+{Closed-set +\\open-set\\evaluation};
 
-\node[pstage, below=9mm of sim] (valid) {V3: timestamp check\\(where available) /\\V4: perceptual-hashing\\check (where not)};
+\node[model, below=8mm of global] (finetune)
+{Fine-tuned\\MegaDescriptor};
 
-\draw[arr] (raw) -- (aug);
-\draw[arr] (aug) -- (dino);
-\draw[arr] (dino) -- (sim);
-\draw[arr] (sim) -- (clust);
-\draw[arr] (clust) -- (splitn);
-\draw[arr] (splitn) -- (reid);
+\draw[arr] (raw) -- (crop);
+\draw[arr] (crop) -- (global);
+\draw[arr] (global) -- (semantic);
+\draw[arr] (semantic) -- (local);
+\draw[arr] (local) -- (cal);
+\draw[arr] (cal) -- (fusion);
+\draw[arr] (fusion) -- (pca);
+\draw[arr] (pca) -- (retrieval);
+\draw[arr] (retrieval) -- (evaluation);
 
-\draw[arr, dashed] (clust.south) -- (valid.north);
+\draw[arr, dashed] (global.south) -- (finetune.north);
 
-\end{tikzpicture}
-\caption{Overview of the proposed pipeline. The same six steps, augmentation, DINOv2 feature
-extraction, similarity estimation, clustering, splitting, and evaluation, run identically for all
-37 constituent datasets, regardless of whether timestamps are available. The dashed arrow shows
-validation applied afterward, as a check on the resulting clusters rather than a step in the
-pipeline itself: timestamp agreement where timestamps exist (V3), and perceptual hashing as an
-independent, model-free second opinion where they do not (V4).}
+\end{tikzpicture}%
+}
+\caption{Core research methodology for multi-scale calibrated feature fusion on WildlifeReID-10k.
+Images are first processed using animal detection and cropping. Global, complementary, and local
+representations are then extracted and calibrated before being combined through multi-scale fusion.
+The resulting representation is evaluated under different compression levels and used for
+similarity-based retrieval under closed-set and open-set protocols.}
 \label{fig:pipeline}
 \end{figure}
 
-\begin{itemize}
-\item[\emph{V1}] Replace the manual, per-dataset threshold with an automatic one. For each
-dataset, we sweep candidate values of $\theta$ and score the resulting clustering with the
-silhouette score~\cite{rousseeuw1987silhouettes}, which needs no ground-truth labels, and select
-the value that scores best. This directly targets P1 and H3: it removes the undocumented,
-visual-inspection step from threshold choice, and, unlike manual tuning, gives us a criterion we
-can also apply, and trust, on the 24 datasets that have no timestamps to check the threshold
-against.
-\item[\emph{V2}] Directly test whether the chaining effect is a real problem
-in practice, not just a theoretical one, by running the current connected-components (i.e.\
-single-linkage) clustering and a chain-resistant alternative, complete-linkage clustering, through
-the same pipeline on every dataset. Complete-linkage only merges two points into the same cluster
-if every pairwise similarity inside the resulting cluster stays at or above $\theta$, which directly
-attacks chaining, since no chain of intermediate similarities can smuggle a dissimilar pair into a
-cluster, while remaining a standard, well-understood algorithm rather than one we would need to
-justify from scratch. Both variants are run identically across all 37 datasets, using the threshold
-from V1; we then use whichever subset happens to have timestamps purely to check which variant
-agrees better with timestamp agreement, without that check being part of the pipeline itself. We
-will also report how often the current method's largest clusters (size 6+, where Table 3 shows
-purity already drops to 77.4\%) contain image pairs whose direct pairwise similarity is far below
-$\theta$, which would be direct evidence of chaining.
-\item[\emph{V3}] On the subset of datasets that happen to have usable timestamps (9 of the 13
-with timestamp metadata; see the footnote above), reproduce the comparison behind Table 6 as a
-validation check on the pipeline's output: random split, time-aware split, the current
-similarity-aware split, and our V2 alternative, all measured against each other on the same data.
-This directly answers whether an improved clustering step closes more of the 12.3/16.7-point gap
-that the current similarity-aware split only partially closes, without requiring the pipeline
-itself to treat timestamped and non-timestamped datasets any differently.
-\item[\emph{V4}] The pipeline's own timestamp-agreement check (V3) can only be computed where
-timestamps exist. As a validation check on the pipeline's output for the datasets that lack them,
-we use an independent, model-free signal instead: perceptual hashing, a long-standing technique
-for near-duplicate detection unrelated to any learned embedding, and check where DINOv2-based
-clusters and perceptual-hashing-based near-duplicate flags agree or disagree. Disagreements are
-exactly the borderline cases worth flagging for extra scrutiny. We treat agreement between the two
-as an independent, model-free near-duplicate detection signal that increases our confidence in a
-cluster, not as proof that the cluster is correct: perceptual hashing can respond to shared
-background, composition, or pose rather than to the animal itself, and conversely the same
-individual photographed under very different conditions can hash very differently, so it is a
-useful second opinion rather than a ground truth in its own right.
-\item[\emph{V5}] Investigate whether controlled data augmentation, applied
-\emph{before} DINOv2 feature extraction and similarity analysis rather than only during Re-ID
-training, improves the robustness of the similarity representation used for clustering, with
-particular attention to underrepresented species and individuals (for example sea turtles relative
-to birds) and to wild-captured individuals relative to controlled-environment ones. Concretely, we
-generate augmented views (flips, crops, brightness/lighting changes, rotation) of each image,
-extract DINOv2 features for both the original and augmented views, and include the augmented views
-in the similarity graph and clustering step itself, rather than adding them only after the
-train/test split has already been fixed. This makes augmentation a controlled factor in the
-similarity-analysis pipeline: we compare a no-augmentation baseline against an augmented condition,
-with clustering, splitting, and downstream Re-ID training otherwise identical, and measure whether
-augmentation changes cluster quality, split quality, and the balanced-accuracy gap between
-well-represented and poorly-represented classes and between wild and controlled-environment
-datasets, without simply inflating scores on the classes that are already well represented. We
-define a reproducible, non-arbitrary criterion for which individuals count as low-resource (fewer
-than a fixed threshold of training images) rather than hand-picking species after the fact.
-\end{itemize}
+\emph{Dataset and evaluation setting.}
+The project uses WildlifeReID-10k~\cite{adam2025wildlifereid} as the primary evaluation benchmark.
+The benchmark contains 140,488 images from 37 source datasets, covering approximately 33 species
+and 10,772 individual animals. The experiments use the benchmark's published evaluation protocols
+rather than creating an alternative splitting strategy, allowing the results to be compared with
+existing work on the same benchmark.
 
-As secondary, lower-priority directions that are already supported by the related work above but
-are not our primary focus, we note the possibility of a rotation-invariant backbone for the
-wild, uncontrolled-pose subset of the data, so that, for example, the same bear photographed once
-on land and once in a river is still recognised as the same individual
-regardless of background~\cite{vidal2021perspectives}; of wildlife-specific self-supervised
-pretraining as an alternative to using generic off-the-shelf DINOv2 features; and of
-dataset-aware clustering, which
-would treat each of the 37 constituent datasets as its own visual domain so that shared per-source
-style (lighting, background, camera setup) is not mistaken for true individual similarity.
+The evaluation considers both closed-set and open-set settings. In the closed-set setting, the
+identities represented in the evaluation data are known to the system, allowing the experiment to
+measure how accurately the learned representations retrieve the correct individual. In the open-set
+setting, some identities are not present during training, requiring the system to distinguish known
+individuals from previously unseen ones. These two settings allow the project to evaluate both
+individual-level retrieval and the ability of the proposed representation to generalise beyond
+identities encountered during training.
 
-\begin{credits}
-\subsubsection{\ackname} This proposal is submitted as part of a group project undertaken at the
-University of Johannesburg.
+\emph{Animal detection and cropping.}
+Before extracting visual representations, each image is processed using MegaDetector
+~\cite{beery2019megadetector}. The detector is used to localise the animal and produce a cropped
+image containing the relevant subject. This step is intended to reduce the influence of background
+information, such as vegetation, terrain, camera position, and lighting conditions, which may
+otherwise provide information correlated with an individual's identity.
 
-\subsubsection{\discintname}
-The authors have no competing interests to declare that are relevant to the content of this
-proposal.
-\end{credits}
-%
-% ---- Bibliography ----
+The same detection and cropping procedure is applied before extracting the representations used in
+the experiments. This provides a more consistent input to the different descriptors and reduces the
+possibility that differences in background content determine the observed performance differences
+between representations.
+
+\emph{Global representation.}
+Two wildlife-specific global descriptors are considered. The first is MiewID
+~\cite{otarashvili2024miewid}, which is used as a pre-trained representation for individual animal
+recognition. The second is MegaDescriptor~\cite{cermak2024wildlifedatasets}, which is fine-tuned on
+the WildlifeReID-10k training data using an ArcFace-style angular-margin objective
+~\cite{deng2019arcface}.
+
+The purpose of considering both models is not to assume that one is universally superior, but to
+determine which global representation provides the strongest basis for the subsequent fusion
+experiments. Both representations are evaluated under the same retrieval protocol before the
+stronger candidate is selected for the main fusion experiments.
+
+The fine-tuning procedure is performed using training data only. Validation data are used for model
+selection and parameter tuning, while the test data remain isolated until the final evaluation.
+This separation prevents information from the evaluation set from influencing the learned global
+representation.
+
+\emph{Complementary representation.}
+EVA02~\cite{fang2023eva02} is used as a second visual representation. Unlike MiewID and
+MegaDescriptor, EVA02 is not specifically trained for wildlife individual re-identification.
+Instead, it provides a general visual representation learned from large-scale image data. It is
+therefore treated in this project as a complementary visual source rather than as a dedicated
+wildlife identity descriptor.
+
+The purpose of including EVA02 is to test whether information contained in a general visual
+representation can provide additional discriminative information when combined with a
+wildlife-specific global descriptor and local keypoint evidence. Its contribution is evaluated
+through ablation experiments that compare the global representation alone with combinations of the
+global, EVA02, and local representations.
+
+\emph{Local representation.}
+Local visual information is obtained using ALIKED~\cite{zhao2023aliked}. Unlike MiewID, MegaDescriptor,
+and EVA02, ALIKED is not treated as a fixed-length image embedding. It detects local keypoints and
+produces correspondences between two images. The resulting matching information provides evidence
+about whether fine-grained spatial patterns are shared between the two images.
+
+This local information is particularly relevant to individual re-identification because animals of
+the same species may have similar overall morphology while differing in smaller visual details.
+Depending on the species, these details may include spot arrangements, stripe patterns, markings,
+scars, or other local structures. The local matching score is therefore treated as a complementary
+source of identity evidence rather than being concatenated directly with the global embeddings.
+
+\emph{General-purpose baseline.}
+DINOv2~\cite{oquab2023dinov2} is included as a general-purpose baseline. Its embeddings are extracted
+without wildlife-specific fine-tuning and evaluated using the same retrieval framework as the
+wildlife-specific representations.
+
+The purpose of this baseline is to establish whether the proposed wildlife-specific and fused
+representations provide an advantage over a strong general-purpose visual representation. DINOv2
+does not form part of the proposed fusion itself; it is used as a separate comparison point.
+
+\emph{Score calibration.}
+The outputs of the different representations cannot be combined directly because they have different
+numerical meanings and scales. Global descriptors produce vector similarities, typically measured
+using cosine similarity, whereas ALIKED produces a keypoint-matching score. Directly averaging these
+raw values could therefore cause one representation to dominate the fusion simply because its scores
+have a different numerical range.
+
+Following WildFusion~\cite{cermak2024wildfusion}, the raw similarity scores are calibrated before
+fusion. Positive and negative image pairs are sampled from the training or validation data, and the
+relationship between raw similarity scores and pairwise matching outcomes is learned using isotonic
+regression. PCHIP interpolation is then used to obtain a smooth monotonic calibration function.
+
+The calibration parameters are estimated without using the final test set. This ensures that the
+test set remains unseen during calibration and provides an unbiased evaluation of the final system.
+
+\emph{Multi-scale feature fusion.}
+After calibration, the global, complementary, and local evidence is combined. The fusion is performed
+at the similarity-score level rather than by directly concatenating the outputs of the three
+models. This is necessary because ALIKED provides pairwise matching scores rather than a conventional
+fixed-dimensional embedding.
+
+Let $S_g$ denote the calibrated global similarity, $S_c$ the calibrated EVA02 similarity, and
+$S_l$ the calibrated ALIKED similarity. The proposed fusion can be expressed as
+
+\[
+S_{\mathrm{fusion}}
+=
+w_g S_g
++
+w_c S_c
++
+w_l S_l,
+\]
+
+where
+
+\[
+w_g+w_c+w_l=1
+\]
+
+and each weight is non-negative.
+
+The weights are selected using validation data and are not estimated using the final test set.
+Different configurations are evaluated, including the global representation alone, global plus
+local fusion, global plus complementary fusion, and the complete global-complementary-local fusion.
+These comparisons provide an ablation-based test of whether each representation contributes useful
+information beyond the others.
+
+The global descriptor used in the final fusion is selected based on the comparison between MiewID and
+fine-tuned MegaDescriptor. This prevents the choice of global descriptor from being assumed in advance
+and allows the experiments to establish which representation provides the stronger foundation for
+multi-scale fusion on WildlifeReID-10k.
+
+\emph{PCA-based compression.}
+The proposed fused representation is subsequently examined under different dimensionality
+constraints. PCA~\cite{jolliffe2002pca} is applied to the fused representation using training data,
+and several target dimensionalities are evaluated.
+
+The purpose of this experiment is to determine how much dimensionality can be removed while
+preserving individual-level discrimination. The unreduced representation is used as the reference
+condition, and retrieval performance at progressively smaller dimensionalities is compared with this
+reference.
+
+Compression is therefore treated as an experimental variable rather than simply as an engineering
+optimisation. The results will show whether the fused representation contains redundant information
+and identify the point at which dimensionality reduction begins to negatively affect individual
+re-identification performance.
+
+\emph{Similarity retrieval.}
+The resulting representation is used for similarity-based retrieval. Given a query image, the system
+compares its representation with representations stored in the gallery and ranks candidate images
+according to their similarity to the query.
+
+Locality-sensitive hashing (LSH)~\cite{indyk1998lsh} may be used to accelerate similarity search for
+the large gallery. However, the primary research outcome remains retrieval accuracy rather than
+indexing performance. Retrieval latency and memory requirements are recorded as secondary measures
+to characterise the practical cost of the proposed representation.
+
+\emph{Closed-set evaluation.}
+In the closed-set experiment, the correct individual is assumed to be represented within the known
+identity set. For each query image, the gallery images are ranked according to the final similarity
+score, and the position of the correct identity is used to evaluate retrieval performance.
+
+The fused representation is compared against the individual descriptors and relevant ablation
+configurations. This experiment directly addresses whether combining complementary visual evidence
+improves individual-level retrieval compared with relying on a single representation.
+
+\emph{Open-set evaluation.}
+The open-set experiment evaluates whether the proposed representation can handle individuals that
+were not observed during training. Rather than forcing every query to match an existing identity, the
+system applies a decision threshold to determine whether the strongest gallery match is sufficiently
+similar to be considered a known individual.
+
+Let $S_{\max}$ denote the similarity score of the strongest gallery match. The decision is defined as
+
+\[
+\hat{y} =
+\begin{cases}
+\text{known identity}, & S_{\max} \geq \tau,\\
+\text{unknown individual}, & S_{\max} < \tau,
+\end{cases}
+\]
+
+where $\tau$ is the open-set decision threshold.
+
+The threshold is selected using validation data and is not determined using the final test set.
+Where supported by the benchmark protocol, thresholds are calibrated separately by species to
+account for differences in visual similarity between individuals of different species. The final
+evaluation is then performed on the held-out test data.
+
+Performance is reported using the evaluation measures specified by WildlifeReID-10k, including the
+closed-set and open-set metrics used by the benchmark. This allows the proposed method to be assessed
+under the same evaluation framework as existing WildlifeReID-10k results.
+
+\emph{Ablation and comparative evaluation.}
+The experiments are structured to determine which parts of the proposed methodology contribute to
+performance. The main comparisons include MiewID, fine-tuned MegaDescriptor, EVA02, ALIKED, and DINOv2
+as individual or baseline representations, followed by combinations of global, complementary, and
+local evidence.
+
+The complete fusion is then compared with reduced fusion configurations. These comparisons allow the
+project to determine whether improvements arise from the fusion itself or simply from using a
+stronger individual descriptor. The compression experiments further determine whether the observed
+improvements remain after reducing the dimensionality of the fused representation.
+
+The final results are reported separately for closed-set and open-set evaluation and, where supported
+by the benchmark, across the different species and source datasets. This makes it possible to assess
+not only overall retrieval performance but also whether the observed benefit is consistent across
+the heterogeneous data represented in WildlifeReID-10k.
+
+The research methodology described above represents only the core experimental pipeline. Any
+inference API, web application, or other software interface developed for demonstration or course
+requirements is treated as a separate implementation deliverable. These components are not part of
+the proposed research pipeline and are not used to define the scientific methodology or the
+experimental evaluation.
+
+\section{Justification and Conclusion}
+
+The proposed study addresses the research gap identified in Section~3: although calibrated fusion
+of global, local, and complementary visual representations has shown promising results for wildlife
+Re-ID, it remains unclear whether these representations provide consistent additional information
+when evaluated together at the scale and diversity of WildlifeReID-10k. Existing studies have
+demonstrated the value of combining different sources of visual evidence, but the extent to which
+this benefit transfers to a large benchmark containing many species, source datasets, and unseen
+individuals remains insufficiently established. This project therefore evaluates the proposed
+fusion directly on WildlifeReID-10k using its established evaluation protocols.
+
+The choice of representations is motivated by the different types of information that they provide.
+MiewID and MegaDescriptor provide wildlife-specific global representations that capture broader
+visual characteristics associated with individual animals. EVA02 provides a general visual
+representation that may contain information not captured by the wildlife-specific descriptor, while
+ALIKED provides local correspondence information that can capture fine-grained spatial patterns.
+Considering these representations together allows the project to test whether different forms of
+visual evidence are complementary at the individual level. The direct comparison between MiewID and
+fine-tuned MegaDescriptor also prevents the choice of global descriptor from being assumed in
+advance.
+
+Calibration is an important part of the proposed approach because the representations do not produce
+directly comparable similarity scores. Applying calibration before fusion allows the contribution of
+each representation to be combined on a common scale. The ablation experiments then provide a direct
+way of determining whether the observed performance improvement is actually attributable to
+complementary information from multiple representations rather than simply to the strength of one
+individual descriptor.
+
+The evaluation under both closed-set and open-set conditions addresses two different aspects of
+individual re-identification. Closed-set evaluation measures the ability to retrieve the correct
+individual when the relevant identity is represented in the known population. Open-set evaluation
+extends this problem by requiring the system to recognise when a query does not correspond to a known
+individual. This distinction is important for wildlife monitoring because populations are not static:
+individuals may enter a monitored population or appear in the data without having been observed
+previously. Evaluating both settings therefore provides a stronger assessment of whether the proposed
+representation can support realistic individual-level re-identification.
+
+The study also evaluates the proposed representation across the heterogeneous data contained in
+WildlifeReID-10k. The benchmark combines multiple source datasets and species that differ in
+appearance, image conditions, and the number of images available for each identity. Reporting
+performance across these conditions allows the project to determine whether the benefit of fusion is
+consistent or whether it depends strongly on particular species or source collections. This is
+important because a method that performs well only on a subset of the benchmark would provide weaker
+evidence for general multi-species wildlife re-identification.
+
+Finally, the compression experiment investigates how much of the fused representation is actually
+necessary for individual-level discrimination. PCA is used to produce representations of different
+dimensionalities, and retrieval performance is compared with the unreduced representation. This
+experiment does not assume that the highest-variance dimensions are necessarily the most useful for
+identity recognition. Instead, it empirically determines whether dimensionality can be reduced while
+maintaining useful individual-level information. Runtime and memory measurements are included as
+secondary indicators of practical efficiency, while retrieval accuracy remains the primary research
+outcome.
+
+Taken together, these experiments provide a structured evaluation of multi-scale calibrated feature
+fusion for wildlife individual Re-ID. The study does not assume that fusion will necessarily improve
+performance. Instead, it tests whether global, complementary, and local representations provide
+measurable additional information, whether that benefit extends to unseen individuals and diverse
+species, and how much of the resulting representation can be removed before performance begins to
+degrade. Comparisons with individual descriptors and DINOv2 provide appropriate reference points for
+interpreting any observed improvement.
+
+The expected contribution of the project is therefore empirical rather than a claim of a universally
+superior re-identification system. The study aims to provide evidence about the usefulness,
+generalisability, and compression tolerance of calibrated multi-scale feature fusion on a large,
+heterogeneous wildlife Re-ID benchmark. If the fused representation consistently outperforms the
+individual representations under the benchmark's evaluation protocols, this would support the
+hypothesis that combining complementary visual evidence is beneficial for individual wildlife
+re-identification. Conversely, limited or inconsistent improvements would provide evidence about the
+conditions under which such fusion does not provide sufficient additional information to justify its
+complexity.
+
 %
 \bibliographystyle{splncs04}
 \bibliography{references}

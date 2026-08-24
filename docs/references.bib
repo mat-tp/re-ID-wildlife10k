@@ -1,193 +1,279 @@
-% Please use the biblography references (bibTex) from google schoolar, and Above please give the breif summary for the citation, 
-% see example bellow
-
-% Paper that proposes the Dataset
+% Paper that proposes the WildlifeReID-10k dataset (CVPR Workshop 2025 camera-ready version)
 @inproceedings{adam2025wildlifereid,
-  title={WildlifeReID-10k: Wildlife re-identification dataset with 10k individual animals},
-  author={Adam, Lukas and Cermak, Vojtech and Papafitsoros, Kostas and Picek, Lukas},
-  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
-  pages={2124--2134},
-  year={2025}
-}
-
-% This introduces the DINOv2 Tranformer model that combines self-Distallation(Transferring information learned from other models) with NO-Labels
-% We are likely going to use it's pretrained model to get the embedding features
-@inproceedings{caron2021emerging,
-  title={Emerging properties in self-supervised vision transformers},
-  author={Caron, Mathilde and Touvron, Hugo and Misra, Ishan and J{\'e}gou, Herv{\'e} and Mairal, Julien and Bojanowski, Piotr and Joulin, Armand},
-  booktitle={2021 IEEE/CVF international conference on computer vision (ICCV)},
-  pages={9630--9640},
-  year={2021},
-  organization={IEEE}
-}
-
-% Outlines challange with face re-Identification
-@article{cheng2020face,
-  title={Face re-identification challenge: Are face recognition models good enough?},
-  author={Cheng, Zhiyi and Zhu, Xiatian and Gong, Shaogang},
-  journal={Pattern Recognition},
-  volume={107},
-  pages={107422},
-  year={2020},
-  publisher={Elsevier}
-}
-
-% The actual DINOv2 paper. DINO (caron2021emerging, above) is the 2021 predecessor; DINOv2 is the
-% larger, later successor whose embeddings WildlifeReID-10k actually uses for its similarity graph.
-% These are two different papers and must be cited separately.
-@article{oquab2023dinov2,
-  title={DINOv2: Learning robust visual features without supervision},
-  author={Oquab, Maxime and Darcet, Timoth{\'e}e and Moutakanni, Th{\'e}o and Vo, Huy and Szafraniec,
-          Marc and Khalidov, Vasil and Fernandez, Pierre and Haziza, Daniel and Massa, Francisco and
-          El-Nouby, Alaaeldin and others},
-  journal={arXiv preprint arXiv:2304.07193},
-  year={2023}
+  title     = {WildlifeReID-10k: Wildlife re-identification dataset with 10k individual animals},
+  author    = {Adam, Lukas and Cermak, Vojtech and Papafitsoros, Kostas and Picek, Lukas},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+  pages     = {2124--2134},
+  year      = {2025}
 }
 
 % Earlier arXiv preprint of the WildlifeReID-10k paper, describing 30 constituent datasets and a
-% DBSCAN-based clustering step, later revised to single-linkage clustering in the camera-ready.
+% different splitting algorithm, later revised in the camera-ready version above.
 @article{adam2024wildlifereidarxiv,
-  title={WildlifeReID-10k: Wildlife re-identification dataset with 10k individual animals},
-  author={Adam, Lukas and Cermak, Vojtech and Papafitsoros, Kostas and Picek, Lukas},
-  journal={arXiv preprint arXiv:2406.09211},
-  year={2024}
+  title   = {WildlifeReID-10k: Wildlife re-identification dataset with 10k individual animals},
+  author  = {Adam, Lukas and Cermak, Vojtech and Papafitsoros, Kostas and Picek, Lukas},
+  journal = {arXiv preprint arXiv:2406.09211},
+  year    = {2024}
 }
 
-% Classic clustering survey, source for the general, long-recognised "chaining effect" weakness of
-% single-linkage clustering that we discuss in P2.
-@article{jain1999data,
-  title={Data clustering: a review},
-  author={Jain, Anil K and Murty, M Narasimha and Flynn, Patrick J},
-  journal={ACM Computing Surveys},
-  volume={31},
-  number={3},
-  pages={264--323},
-  year={1999},
-  publisher={ACM New York, NY, USA}
+% DINO: introduces self-distillation with no labels for training vision transformers.
+@inproceedings{caron2021emerging,
+  title        = {Emerging properties in self-supervised vision transformers},
+  author       = {Caron, Mathilde and Touvron, Hugo and Misra, Ishan and J{\'e}gou, Herv{\'e} and Mairal, Julien and Bojanowski, Piotr and Joulin, Armand},
+  booktitle    = {2021 IEEE/CVF international conference on computer vision (ICCV)},
+  pages        = {9630--9640},
+  year         = {2021},
+  organization = {IEEE}
 }
 
-% Original HDBSCAN algorithm paper (density-based clustering built to be more chain-resistant than
-% single-linkage), one of two companion papers we cite for the method.
-@inproceedings{campello2013density,
-  title={Density-based clustering based on hierarchical density estimates},
-  author={Campello, Ricardo JGB and Moulavi, Davoud and Sander, Joerg},
-  booktitle={Pacific-Asia Conference on Knowledge Discovery and Data Mining},
-  pages={160--172},
-  year={2013},
-  organization={Springer}
+% DINOv2: the larger, later successor to DINO, used as our general-purpose baseline.
+@article{oquab2023dinov2,
+  title   = {DINOv2: Learning robust visual features without supervision},
+  author  = {Oquab, Maxime and Darcet, Timoth{\'e}e and Moutakanni, Th{\'e}o and Vo, Huy and Szafraniec,
+             Marc and Khalidov, Vasil and Fernandez, Pierre and Haziza, Daniel and Massa, Francisco and
+             El-Nouby, Alaaeldin and others},
+  journal = {arXiv preprint arXiv:2304.07193},
+  year    = {2023}
 }
 
-% Extended journal version of the HDBSCAN algorithm paper above.
-@article{campello2015hierarchical,
-  title={Hierarchical density estimates for data clustering, visualization, and outlier detection},
-  author={Campello, Ricardo JGB and Moulavi, Davoud and Zimek, Arthur and Sander, Joerg},
-  journal={ACM Transactions on Knowledge Discovery from Data},
-  volume={10},
-  number={1},
-  pages={1--51},
-  year={2015},
-  publisher={ACM New York, NY, USA}
+% Outlines the challenge with face re-identification, motivating multi-descriptor fusion rather than
+% relying on a single embedding.
+@article{cheng2020face,
+  title     = {Face re-identification challenge: Are face recognition models good enough?},
+  author    = {Cheng, Zhiyi and Zhu, Xiatian and Gong, Shaogang},
+  journal   = {Pattern Recognition},
+  volume    = {107},
+  pages     = {107422},
+  year      = {2020},
+  publisher = {Elsevier}
 }
 
-% The widely-used hdbscan software implementation paper, cited alongside the two algorithm papers
-% above whenever we refer to HDBSCAN as a candidate replacement for single-linkage clustering.
-@article{mcinnes2017hdbscan,
-  title={hdbscan: Hierarchical density based clustering},
-  author={McInnes, Leland and Healy, John and Astels, Steve},
-  journal={Journal of Open Source Software},
-  volume={2},
-  number={11},
-  pages={205},
-  year={2017}
-}
-
-% Source of the silhouette score, the label-free clustering-quality criterion we propose as an
-% automatic alternative to manual, per-dataset threshold selection.
-@article{rousseeuw1987silhouettes,
-  title={Silhouettes: a graphical aid to the interpretation and validation of cluster analysis},
-  author={Rousseeuw, Peter J},
-  journal={Journal of Computational and Applied Mathematics},
-  volume={20},
-  pages={53--65},
-  year={1987},
-  publisher={Elsevier}
-}
-
-% Source of the open-set evaluation framework (normalized accuracy / open-set f-measure) that
-% BAKS and BAUS, WildlifeReID-10k's own metrics, are built on.
+% Source of the open-set evaluation framework (normalised accuracy) that BAKS/BAUS are built on.
 @article{mendes2017open,
-  title={Nearest neighbors distance ratio open-set classifier},
-  author={Mendes J{\'u}nior, Pedro R and de Souza, Roberto M and Werneck, Rafael de O and Stein,
-          Bernardo V and Pazinato, Daniel V and de Almeida, Waldir R and Penatti, Ot{\'a}vio A B and
-          Torres, Ricardo da S and Rocha, Anderson},
-  journal={Machine Learning},
-  volume={106},
-  number={3},
-  pages={359--386},
-  year={2017},
-  publisher={Springer}
+  title     = {Nearest neighbors distance ratio open-set classifier},
+  author    = {Mendes J{\'u}nior, Pedro R and de Souza, Roberto M and Werneck, Rafael de O and Stein,
+               Bernardo V and Pazinato, Daniel V and de Almeida, Waldir R and Penatti, Ot{\'a}vio A B and
+               Torres, Ricardo da S and Rocha, Anderson},
+  journal   = {Machine Learning},
+  volume    = {106},
+  number    = {3},
+  pages     = {359--386},
+  year      = {2017},
+  publisher = {Springer}
 }
 
-% Survey of person re-identification methods, including unsupervised domain adaptation via
-% clustering-based pseudo-labelling and the noisy-pseudo-label weakness of hard cluster assignment
-% that we draw on when discussing P2/P3.
+% Survey of person re-identification methods, structurally the same retrieval problem as animal Re-ID.
 @article{personreidsurvey,
-  title={Person re-identification: A retrospective on domain specific open challenges and future trends},
-  author={Kumar, S Anubha and Yaghoubi, Ehsan and Das, Abhijit and Harisha, BS and Proen{\c{c}}a, Hugo},
-  journal={Pattern Recognition},
-  volume={139},
-  pages={109422},
-  year={2023},
-  publisher={Elsevier}
+  title     = {Person re-identification: A retrospective on domain specific open challenges and future trends},
+  author    = {Kumar, S Anubha and Yaghoubi, Ehsan and Das, Abhijit and Harisha, BS and Proen{\c{c}}a, Hugo},
+  journal   = {Pattern Recognition},
+  volume    = {139},
+  pages     = {109422},
+  year      = {2023},
+  publisher = {Elsevier}
 }
 
-% Transformer-era survey of re-identification (with a dedicated Animal Re-ID section) used to
-% situate WildlifeReID-10k within the broader, still-immature animal re-identification literature.
+% Transformer-era survey of re-identification (with a dedicated Animal Re-ID section) situating
+% WildlifeReID-10k within the broader, still-immature animal re-identification literature.
 @article{ye2025transformer,
-  title={Transformer for object re-identification: A survey},
-  author={Ye, Mang and Chen, Shuoyi and Li, Chenyue and Zheng, Wei-Shi and Crandall, David and Du, Bo},
-  journal={International Journal of Computer Vision},
-  year={2025},
-  publisher={Springer}
+  title     = {Transformer for object re-identification: A survey},
+  author    = {Ye, Mang and Chen, Shuoyi and Li, Chenyue and Zheng, Wei-Shi and Crandall, David and Du, Bo},
+  journal   = {International Journal of Computer Vision},
+  year      = {2025},
+  publisher = {Springer}
 }
 
-% Meta-Dataset, a large collection of datasets assembled for few-shot learning, used as a point of
-% comparison for how heterogeneity across constituent datasets can be handled during evaluation.
+% Meta-Dataset, a large "dataset-of-datasets" for few-shot learning, used as a point of comparison
+% for how heterogeneity across constituent datasets can be handled during evaluation.
 @article{triantafillou2019meta,
-  title={Meta-dataset: A dataset of datasets for learning to learn from few examples},
-  author={Triantafillou, Eleni and Zhu, Tyler and Dumoulin, Vincent and Lamblin, Pascal and Evci,
-          Utku and Xu, Kelvin and Goroshin, Ross and Gelada, Carles and Swersky, Kevin and Manzagol,
-          Pierre-Antoine and others},
-  journal={arXiv preprint arXiv:1903.03096},
-  year={2019}
+  title   = {Meta-dataset: A dataset of datasets for learning to learn from few examples},
+  author  = {Triantafillou, Eleni and Zhu, Tyler and Dumoulin, Vincent and Lamblin, Pascal and Evci,
+             Utku and Xu, Kelvin and Goroshin, Ross and Gelada, Carles and Swersky, Kevin and Manzagol,
+             Pierre-Antoine and others},
+  journal = {arXiv preprint arXiv:1903.03096},
+  year    = {2019}
 }
 
+% WildFusion: calibrated global-local similarity fusion for animal Re-ID, the core fusion idea this
+% proposal builds on.
 @inproceedings{cermak2024wildfusion,
-  title={Wildfusion: Individual animal identification with calibrated similarity fusion},
-  author={Cermak, Vojt{\v{e}}ch and Picek, Lukas and Adam, Luk{\'a}{\v{s}} and Neumann, Luk{\'a}{\v{s}} and Matas, Ji{\v{r}}{\'\i}},
-  booktitle={European Conference on Computer Vision},
-  pages={18--36},
-  year={2024},
-  organization={Springer}
+  title        = {Wildfusion: Individual animal identification with calibrated similarity fusion},
+  author       = {Cermak, Vojt{\v{e}}ch and Picek, Lukas and Adam, Luk{\'a}{\v{s}} and Neumann, Luk{\'a}{\v{s}} and Matas, Ji{\v{r}}{\'\i}},
+  booktitle    = {European Conference on Computer Vision},
+  pages        = {18--36},
+  year         = {2024},
+  organization = {Springer}
 }
 
-@article{akbar2025body,
-  title={Body-part-based individual feral cat identification from camera trap images using deep learning},
-  author={Akbar, Rio Rifqi Syah and Rees, Matthew W and Fleming, Patricia A and Sohel, Ferdous},
-  journal={Ecological Informatics},
-  volume={90},
-  pages={103258},
-  year={2025},
-  publisher={Elsevier}
-}
-
+% Discusses individual animal identification from both a biology and computer-vision perspective.
 @article{vidal2021perspectives,
-  title={Perspectives on individual animal identification from biology and computer vision},
-  author={Vidal, Maxime and Wolf, Nathan and Rosenberg, Beth and Harris, Bradley P and Mathis, Alexander},
-  journal={Integrative and comparative biology},
-  volume={61},
-  number={3},
-  pages={900--916},
-  year={2021},
-  publisher={Oxford University Press}
+  title     = {Perspectives on individual animal identification from biology and computer vision},
+  author    = {Vidal, Maxime and Wolf, Nathan and Rosenberg, Beth and Harris, Bradley P and Mathis, Alexander},
+  journal   = {Integrative and comparative biology},
+  volume    = {61},
+  number    = {3},
+  pages     = {900--916},
+  year      = {2021},
+  publisher = {Oxford University Press}
+}
+
+% WildlifeDatasets toolkit and MegaDescriptor, the first foundation model built specifically for
+% individual animal re-identification.
+@inproceedings{cermak2024wildlifedatasets,
+  title     = {{WildlifeDatasets}: An open-source toolkit for animal re-identification},
+  author    = {{\v{C}}erm{\'a}k, Vojt{\v{e}}ch and Picek, Lukas and Adam, Luk{\'a}{\v{s}} and Papafitsoros, Kostas},
+  booktitle = {Proceedings of the IEEE/CVF Winter Conference on Applications of Computer Vision (WACV)},
+  pages     = {5953--5963},
+  year      = {2024}
+}
+
+% MiewID: multi-species animal Re-ID model (EfficientNetV2 backbone, sub-center ArcFace loss),
+% trained on a 49-species, Wildbook-curated dataset. Our proposed global descriptor.
+@article{otarashvili2024miewid,
+  title   = {Multispecies Animal {Re-ID} Using a Large Community-Curated Dataset},
+  author  = {Otarashvili, Lasha and Subramanian, Tamilselvan and Holmberg, Jason and Levenson, J. J. and Stewart, Charles V.},
+  journal = {arXiv preprint arXiv:2412.05602},
+  year    = {2024}
+}
+
+% EVA-02: the CLIP-style, masked-image-modelling vision transformer used as our semantic descriptor.
+@article{fang2023eva02,
+  title     = {{EVA-02}: A visual representation for neon genesis},
+  author    = {Fang, Yuxin and Sun, Quan and Wang, Xinggang and Huang, Tiejun and Wang, Xinlong and Cao, Yue},
+  journal   = {Image and Vision Computing},
+  volume    = {149},
+  pages     = {105171},
+  year      = {2024},
+  publisher = {Elsevier}
+}
+
+% ALIKED: the lightweight, learning-based local keypoint detector and descriptor used for local
+% fine-grained matching (spot arrangements, stripe patterns, scars).
+@article{zhao2023aliked,
+  title     = {{ALIKED}: A lighter keypoint and descriptor extraction network via deformable transformation},
+  author    = {Zhao, Xiaoming and Wu, Xingming and Chen, Weihai and Chen, Peter C. Y. and Xu, Qingsong and Li, Zhengguo},
+  journal   = {IEEE Transactions on Instrumentation and Measurement},
+  volume    = {72},
+  pages     = {1--16},
+  year      = {2023},
+  publisher = {IEEE}
+}
+
+% MegaDetector: the class-agnostic animal/person/vehicle detector used for camera-trap cropping,
+% adopted instead of a generic, everyday-photograph object detector.
+@article{beery2019megadetector,
+  title   = {Efficient pipeline for camera trap image review},
+  author  = {Beery, Sara and Morris, Dan and Yang, Siyu},
+  journal = {arXiv preprint arXiv:1907.06772},
+  year    = {2019}
+}
+
+% AnimalCLEF 2025 entry fusing MegaDescriptor (global), ALIKED (local), and EVA02 (semantic) via
+% WildFusion-style calibration; placed in the top 19% of 230 teams.
+@inproceedings{kim2025animalclef,
+  title     = {Fusion of Global and Local Descriptors with Feature Calibration for Multi-Species Animal
+               Re-Identification: {AnimalCLEF} 2025},
+  author    = {Kim, Dongyeon and Park, Bohee and Bae, Hanjun and Lee, Sua and Lee, Chaeyeon},
+  booktitle = {CLEF 2025 Working Notes, CEUR Workshop Proceedings},
+  volume    = {4038},
+  year      = {2025}
+}
+
+% 2026 open-set follow-up combining a MiewID global descriptor with ALIKED+LightGlue and
+% DISK+LightGlue local matching on top of WildFusion calibration; reports the best public
+% Adjusted Rand Index on the AnimalCLEF26 leaderboard.
+@article{elbassat2026calibrated,
+  title   = {Calibrated Similarity and Graph Clustering for Open-Set Animal Re-Identification},
+  author  = {ElBassat, Mohamed and Elkerdany, Seifeldin and ElBialy, Mohamed and Abouelhamd, Gamal and
+             Ghoneim, Jana and Elkady, Assem and Elboraay, Mohamed and Semenova, Nelly},
+  journal = {arXiv preprint arXiv:2608.02469},
+  year    = {2026}
+}
+
+% ArcFace: the angular-margin metric-learning loss used to fine-tune MegaDescriptor.
+@inproceedings{deng2019arcface,
+  title     = {{ArcFace}: Additive angular margin loss for deep face recognition},
+  author    = {Deng, Jiankang and Guo, Jia and Xue, Niannan and Zafeiriou, Stefanos},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  pages     = {4690--4699},
+  year      = {2019}
+}
+
+% Apache Spark, the distributed-processing engine used for parallel data ingestion and feature
+% extraction.
+@article{zaharia2016spark,
+  title     = {Apache {Spark}: A unified engine for big data processing},
+  author    = {Zaharia, Matei and Xin, Reynold S and Wendell, Patrick and Das, Tathagata and Armbrust, Michael and
+               Dave, Ankur and Meng, Xiangrui and Rosen, Josh and Venkataraman, Shivaram and Franklin, Michael J and others},
+  journal   = {Communications of the ACM},
+  volume    = {59},
+  number    = {11},
+  pages     = {56--65},
+  year      = {2016},
+  publisher = {ACM New York, NY, USA}
+}
+
+% Locality-sensitive hashing, used to make similarity-based retrieval scale sub-linearly with
+% gallery size.
+@inproceedings{indyk1998lsh,
+  title     = {Approximate nearest neighbors: towards removing the curse of dimensionality},
+  author    = {Indyk, Piotr and Motwani, Rajeev},
+  booktitle = {Proceedings of the Thirtieth Annual ACM Symposium on Theory of Computing (STOC)},
+  pages     = {604--613},
+  year      = {1998}
+}
+
+% Standard reference for PCA, the dimensionality-reduction step applied before similarity search.
+@article{jolliffe2002pca,
+  title     = {Principal Component Analysis},
+  author    = {Jolliffe, Ian T},
+  journal   = {Springer Series in Statistics},
+  year      = {2002},
+  publisher = {Springer}
+}
+
+% The MMDS textbook: source of the finding-similar-items, LSH, and dimensionality-reduction material
+% this proposal's Big Data / retrieval components build around.
+@book{leskovec2020mmds,
+  title     = {Mining of Massive Datasets},
+  author    = {Leskovec, Jure and Rajaraman, Anand and Ullman, Jeffrey David},
+  edition   = {3rd},
+  year      = {2020},
+  publisher = {Cambridge University Press}
+}
+
+% Survey of deep-learning methods for multi-species animal re-identification and tracking; highlights
+% domain shift and inconsistent evaluation as recurring weaknesses in the field.
+@article{ravoor2020survey,
+  title     = {Deep learning methods for multi-species animal re-identification and tracking--a survey},
+  author    = {Ravoor, Prashanth C. and Sudarshan, T. S. B.},
+  journal   = {Computer Science Review},
+  volume    = {38},
+  pages     = {100289},
+  year      = {2020},
+  publisher = {Elsevier}
+}
+
+% Survey tracing the field's move from species-specific models towards universal, multi-species
+% re-identification (of which MiewID and MegaDescriptor are examples).
+@article{beyan2026survey,
+  title     = {From species-specific models to universal re-ID: a survey of animal re-identification},
+  author    = {Beyan, Cigdem and Tur, Anil Osman and Karimi, Ehsan},
+  journal   = {Information Fusion},
+  volume    = {133},
+  pages     = {104323},
+  year      = {2026},
+  publisher = {Elsevier}
+}
+
+% CARE: aligns image-conditioned textual descriptions with individual-level visual features to
+% address low inter-individual and high intra-individual variability in animal Re-ID; further,
+% independent support for including a semantic descriptor alongside global and local ones.
+@inproceedings{wu2026care,
+  title     = {Overcoming Fine-Grained Visual Challenges in Animal Re-Identification via Semantic Feature Alignment},
+  author    = {Wu, Yihao and Zhao, Di and Li, Yuzhuo and Alajas, Matthew and Glen, Alistair S. and
+               Zhang, Jingfeng and Dobbie, Gillian and Wilson, Daniel and Koh, Yun Sing},
+  booktitle = {Proceedings of the IEEE/CVF Winter Conference on Applications of Computer Vision (WACV)},
+  pages     = {371--381},
+  year      = {2026}
 }
