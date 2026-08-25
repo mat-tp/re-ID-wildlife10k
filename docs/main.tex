@@ -17,7 +17,7 @@
 Kamohelo Lebjane \inst{1} \and
 Brilliant Mogaladi \inst{1}}
 %
-\authorrunning{T. Matlala et al.}
+\authorrunning{T. Matlala, K. Lebjane, and B. Mogaladi}
 %
 \institute{Academy of Computer Science and Software Engineering,
 \\University of Johannesburg, 
@@ -34,56 +34,53 @@ Brilliant Mogaladi \inst{1}}
 \section{Introduction}
 
 Wildlife individual re-identification (Re-ID) is the task of determining whether
-different images show the same individual animal. Unlike species classification,
+different images show the same individual animal. This task is unlike species classification,
 which asks what type of animal appears in an image, Re-ID asks which particular
-individual is shown. This distinction is important for wildlife monitoring
+individual is shown this distinction is important for wildlife monitoring
 because the same individual may appear differently across photographs due to
-changes in viewpoint, lighting, pose, body condition, or environment, while
-different individuals of the same species may have very similar appearances.
-Reliable individual identification is therefore a key requirement for
-long-term monitoring without physically tagging or repeatedly handling
-animals~\cite{vidal2021perspectives}.
+changes in view point, lighting, pose, body condition, or environment, while
+different individuals of the same species may have very similar appearances, we 
+therefore require a reliable individual identification for monitoring without using physical tagging
+or repeatedly handling animals~\cite{vidal2021perspectives}.
 
-Traditional approaches to monitoring individual animals often rely on physical
-tags, collars, or other forms of identification. Although effective in some
-settings, these methods can be invasive, expensive, and difficult to apply
-consistently across many species and locations. Image-based Re-ID provides a
-less invasive alternative: once an individual has been photographed, later
-images can potentially be matched to that individual without additional
-capture or handling. This can support conservation applications such as
+The traditional approaches for monitoring individual animals often rely on physical
+tags, collars, or other forms of identification, which are effective in some
+settings, these methods can be intrusive, expensive, and difficult to apply
+consistently across many species and locations. Re-ID provides a
+less intrusive alternative, where once an individual has been photographed, later
+images can potentially be matched to that individual without additionally
+capturing or handling. This can support conservation applications, such as
 population monitoring, estimating animal abundance, and studying changes in
 individuals over time~\cite{cermak2024wildfusion}.
 
 However, reliable wildlife Re-ID remains difficult in unconstrained
 photographic collections. Images may contain substantial variation in
-background, viewpoint, illumination, image quality, and animal pose. In
+background, view point, illumination, image quality, and animal pose. In
 addition, individuals of the same species may have only subtle visual
 differences. These challenges become more pronounced in large heterogeneous
-benchmarks that combine images from different datasets, locations, and species.
-A representation that performs well on one collection may therefore fail to
+benchmarks that combine images from different datasets, locations, and species, where
+a representation that performs well on one collection may therefore fail to
 generalise to another.
 
 One possible way of addressing this problem is to use complementary visual
-representations rather than relying on a single descriptor. A global
-representation can capture broad characteristics such as body shape and
-morphology, while local features can capture fine-grained patterns such as
-spots, stripes, or other distinctive markings. A third, general-purpose visual
-representation may provide additional information that is not fully captured
+representations rather than relying on a single descriptor: (i) A global
+representation can capture broad characteristics, such as body shape and
+morphology, (ii) local features can capture fine-grained patterns, such as
+spots, stripes, or other distinctive markings, and (iii) can be a general purpose visual
+representation which may provide additional information that is not fully captured
 by either global morphology or local correspondences. The combination of these
 representations may therefore provide a more complete description of an
-individual animal than any one representation alone. Recent work on calibrated
+individual animal than any one of the representation alone. The recent work on calibrated
 fusion has shown that combining global and local evidence can improve wildlife
 Re-ID performance~\cite{cermak2024wildfusion}, while more recent approaches
-have explored adding a third visual representation~\cite{kim2025animalclef}.
+have explored adding a third visual representation~\cite{kim2025fusion}.
 This project investigates whether such complementary representations can
-provide consistent benefits at the scale and diversity of WildlifeReID-10k,
-which contains 140,488 images of 10,772 individuals across 37 source datasets
-and roughly 33 species~\cite{adam2025wildlifereid}. The project focuses on
-calibrated fusion of three types of visual evidence: a global wildlife
+provide consistent benefits at the scale and diversity of WildlifeReID-10k~\cite{adam2025wildlifereid}. 
+The project focuses on calibrated fusion of three types of visual evidence, including a global wildlife
 individual descriptor, a complementary visual representation, and local
-keypoint-based evidence. MiewID and a fine-tuned MegaDescriptor are considered
+key point based evidence. MiewID and a fine-tuned MegaDescriptor are considered
 as alternative global representations, while EVA02 provides the complementary
-representation and ALIKED provides local matching evidence. Their contributions
+representation and ALIKED provides local matching evidence their contributions
 are evaluated individually and in combination to determine whether the
 representations contain complementary information for individual level retrieval.
 
@@ -116,18 +113,17 @@ justifies the proposed approach and summarises the expected contribution.
 
 Wildlife individual re-identification becomes increasingly difficult as the
 number and diversity of images and individuals increase. WildlifeReID-10k
-provides a suitable setting for studying this problem because it combines
-140,488 images of 10,772 individuals from 37 source datasets and approximately
-33 species~\cite{adam2025wildlifereid}. Unlike a small, single-species
+combines 140,488 images of 10,772 individuals from 37 source datasets and approximately
+33 species~\cite{adam2025wildlifereid}. Unlike a small, single species
 collection, this benchmark contains substantial variation in animal
 appearance, image quality, photographic conditions, and the number of images
 available for each individual. A method that performs well on one subset of
 the data may therefore not necessarily generalise to the wider benchmark.
 
-A major difficulty is learning individual-specific information without
+A major difficulty is learning individual specific information without
 relying on incidental visual information. Wildlife images are often captured
 in natural environments where backgrounds, lighting, vegetation, terrain, and
-camera viewpoints vary considerably. If a representation relies too heavily
+camera view points vary considerably, If the representation relies too heavily
 on these factors, it may associate an individual with the environment in
 which it was photographed rather than with characteristics of the animal
 itself. Animal detection and cropping can reduce this risk by focusing the
@@ -136,12 +132,12 @@ must still retain sufficiently detailed information to distinguish individuals
 that may have very similar appearances.
 
 This difficulty is closely related to the limitations of relying on a single
-visual representation. Global descriptors can capture broad characteristics
+visual representation. Global descriptors can capture broad characteristics,
 such as body shape and morphology, but may not fully represent small,
 spatially localised differences between individuals. Local matching methods
-can provide evidence from distinctive patterns such as spots, stripes, or
+can provide evidence from distinctive patterns, such as spots, stripes, or
 scars, but their matching behaviour differs from that of fixed-length global
-embeddings. A general-purpose visual representation may provide additional
+embeddings. A general purpose visual representation may provide additional
 information that is not captured by either global morphology or local
 correspondences. It is therefore necessary to determine whether these
 different forms of visual evidence contain complementary information that can
@@ -256,7 +252,7 @@ similarity-aware splits that reduce leakage from visually similar images
 appearing across training and test sets~\cite{adam2025wildlifereid}.
 
 MiewID provides another wildlife-specific global representation.
-Otarashvili et al.~\cite{otarashvili2024miewid} proposed MiewID as a
+Otarashvili et al.~\cite{otarashvili2024multispecies} proposed MiewID as a
 multi-species individual identification model based on an EfficientNetV2
 backbone and an angular-margin training objective. Its multi-species
 training and reported generalisation to species outside its training data
@@ -289,7 +285,7 @@ information~\cite{cermak2024wildfusion}.
 
 \emph{Multi-representation fusion.}
 More recent work has extended global-local fusion by introducing a third
-visual representation. Kim et al.~\cite{kim2025animalclef} combined
+visual representation. Kim et al.~\cite{kim2025fusion} combined
 MegaDescriptor, ALIKED, and EVA02 for the AnimalCLEF 2025 individual animal
 Re-ID challenge. MegaDescriptor provided global visual features, ALIKED
 provided local keypoint-based matching, and EVA02 supplied an additional
@@ -321,7 +317,7 @@ Re-ID performance~\cite{adam2025wildlifereid}.
 The importance of open-set evaluation is also reflected in AnimalCLEF.
 AnimalCLEF 2025 uses an open-set formulation in which the system must
 determine both whether the query individual exists in the database and, when
-it does, which identity it corresponds to~\cite{turn0search30}. These
+it does, which identity it corresponds to. These
 benchmarks demonstrate that wildlife Re-ID should not be evaluated only as
 closed-set classification. A representation intended for practical
 monitoring must also be able to reject sufficiently dissimilar queries
@@ -368,8 +364,7 @@ MiewID are designed specifically for individual animal identification.
 WildFusion demonstrates that calibrated fusion of global and local evidence
 can improve wildlife Re-ID, and the AnimalCLEF 2025 work demonstrates that a
 third representation, EVA02, can be incorporated into a similar fusion
-framework~\cite{cermak2024wildlifedatasets,cermak2024wildfusion,
-otarashvili2024miewid,kim2025animalclef}.
+framework~\cite{cermak2024wildlifedatasets,cermak2024wildfusion,otarashvili2024multispecies,kim2025fusion}.
 
 What remains less clear is whether this multi-representation approach
 provides consistent individual-level benefits when evaluated at the full
@@ -484,7 +479,7 @@ between representations.
 
 \emph{Global representation.}
 Two wildlife-specific global descriptors are considered. The first is MiewID
-~\cite{otarashvili2024miewid}, which is used as a pre-trained representation for individual animal
+~\cite{otarashvili2024multispecies}, which is used as a pre-trained representation for individual animal
 recognition. The second is MegaDescriptor~\cite{cermak2024wildlifedatasets}, which is fine-tuned on
 the WildlifeReID-10k training data using an ArcFace-style angular-margin objective
 ~\cite{deng2019arcface}.
