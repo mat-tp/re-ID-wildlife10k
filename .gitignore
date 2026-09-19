@@ -4,6 +4,9 @@
 # PDF files
 *.pdf
 
+data/*
+data/
+
 !docs/main.pdf
 
 # LaTeX auxiliary/generated files

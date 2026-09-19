@@ -49,3 +49,5 @@ I've recommended some, feel free to add if you found a different one.
 ```bash
 pip install -r requirements.txt
 ```
+
+I will actually create a docker file, which can make things easier.
