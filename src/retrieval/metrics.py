@@ -24,3 +24,20 @@ TODO: Implement per-species evaluation
 TODO: Implement per-dataset evaluation
 TODO: Add confidence intervals for metrics
 """
+
+
+# Top-1 acuracy is the standard measure of correctness where a model's single guess is ranked
+# the highest probability must exactly match the ground truth label for the prediction to be considered correct.
+def top_k_accuracy(predictions, labels, k=1):
+      """
+      Computes the Top-K accuracy for the given predictions and labels.
+      
+      Args:
+         predictions (torch.Tensor): Model output probabilities or logits of shape (N, C)
+         labels (torch.Tensor): Ground truth labels of shape (N,)
+         k (int): The 'k' in Top-K accuracy. Default is 1 for Top-1 accuracy.
+         
+      Returns:
+         float: Top-K accuracy as a percentage.
+         
+      """

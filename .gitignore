@@ -18,3 +18,5 @@ data/
 *.log
 
 *.zip
+
+__pycache__/

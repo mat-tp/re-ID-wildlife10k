@@ -19,6 +19,7 @@ TODO: Create data augmentation transforms
 TODO: Implement batch sampling strategies (balanced sampling for BAKS/BAUS)
 """
 
+import os
 import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -31,66 +32,69 @@ import matplotlib.pyplot as plt
 
 class WildlifeReID10kDataset(Dataset):
 
-    def __init__(self, metadata_csv = "data/metadata.csv", transform=None):
+    def __init__(self, metadata_csv = "data/metadata.csv", root="data", transform=None, verbose=False):
         self.data = pd.read_csv(metadata_csv, usecols=['path', 'identity', 'species', 'split', 'cluster_id', 'dataset'])
 
         # dropping out the date column as it is not needed for the pipeline
         # self.data = self.data.drop(columns=['date', 'orientation'])
 
         # Visualize the data information
-        print("Dataset Information:")
-        print(self.data.info())
-        print(self.data.columns)
-        print(self.data.iloc[:, 2].head(20))
-        print(self.data.iloc[:, 2].dtype)
+        # print("Dataset Information:")
+        # print(self.data.info())
+        # print(self.data.columns)
+        # print(self.data.iloc[:, 2].head(20))
+        # print(self.data.iloc[:, 2].dtype)
 
+        self.root = root
         self.transform = transform
+
+        self.paths = self.data['path'].tolist()
+        self.labels = self.data['identity'].tolist()
+        self.species = self.data['species'].tolist()
+
+        if verbose:
+            print(self.data.info())
+
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         # Interested in the path, identity, and species.
-        img_path = self.data.iloc[idx]['path']
-        label = self.data.iloc[idx]['identity']
-        species = self.data.iloc[idx]['species']
+        # img_path = self.data.iloc[idx]['path']
+        # label = self.data.iloc[idx]['identity']
+        # species = self.data.iloc[idx]['species']
 
         # Load image (assuming images are in a specific directory)
-        image = self.load_image(img_path)
+        image = self.load_image(self.paths[idx])
 
         if self.transform:
             image = self.transform(image)
 
-        return image, label, species
+        return image, self.labels[idx], self.species[idx]
 
-    def load_image(self, img_path):
+    def load_image(self, rel_path):
 
+        full_path = os.path.join(self.root, rel_path)
         # loading the image using OpenCV
-        image = cv2.imread(img_path)
-
-        # Data normalisation using a min-max normalisation technique to scale the pixel values to a range of [0, 1]
-        # dividing the pixel values by 255.0 to achieve this scaling.
-        
-        image = image / 255.0
+        image = cv2.imread(full_path) # uint8, BGR
 
         # Convert (default) BGR to RGB
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         if image is None:
-            raise FileNotFoundError(f"Image not found at path: {img_path}")
+            raise FileNotFoundError(f"Image not found at path: {full_path}")
 
-        isVisualize = False  # Set to True if you want to visualize the image
-        if isVisualize:
-            plt.imshow(image)
-            plt.show()
+        # isVisualize = False  # Set to True if you want to visualize the image
+        # if isVisualize:
+        #     plt.imshow(image)
+        #     plt.show()
 
         return image
 
 if __name__ == "__main__":
 
-    # Example usage of the WildlifeReID10kDataset class
-
-    my_dataset = WildlifeReID10kDataset(metadata_csv="data/metadata.csv")
-
-    image = my_dataset.load_image("data/images/AerialCattle2017/3owflku95bxsx24643cybxu3qh/0/0/23497_0e074235de2834f1.jpg")
+    ds = WildlifeReID10kDataset("data/metadata.csv", root="data", verbose=True)
+    img = ds.load_image(ds.paths[0])
+    print(img.shape, img.dtype)   # (H, W, 3) uint8
 
     
