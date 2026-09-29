@@ -28,14 +28,17 @@ models = {
     },
     "complementary": {
         "name": "eva02",
-        "embedding_dim": 768
+        "timm_id": "eva02_base_patch14_224.mim_in22k",  # 87 M params, dim=768
+        "embedding_dim": 768,
+        "global_pool": "avg",
     },
     "local": {
         "name": "aliked",
         "num_features": 1000
     },
     "baseline": {
-        "name": "dinov2_vits14"
+        "name": "dinov2_vits14",  # 21 M params, dim=384
+        "embedding_dim": 384,
     }
 }
 
