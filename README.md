@@ -15,7 +15,7 @@ Please include yourself:
 1. Tshephang Matlala
 2. Brilliant Mogaladi
 3. Kamohelo Lebjane
-4. \_
+4. Denzel Zimba
 
 ## Objectives
 
