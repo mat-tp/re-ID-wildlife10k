@@ -16,7 +16,8 @@ import time
 import numpy as np
 import torch
 
-from src.models.complementary_models import ComplementaryModel, DINOv2Baseline
+from src.models.complementary_models import ComplementaryModel
+from src.models.baseline_models import DINOv2Baseline
 
 
 def _check_embedding(name: str, model, dummy_img: np.ndarray) -> None:
