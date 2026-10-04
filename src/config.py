@@ -29,7 +29,10 @@ data = {
 models = {
     "global": {
         "name": "megadescriptor",
-        "embedding_dim": 2048,
+        "variant": "L-384",             # L-384 -> 1536-d (config used to say 2048, which is wrong)
+        "init": "megadescriptor",       # "imagenet" = leakage-free start (see global_models.py)
+        "grad_checkpointing": True,
+        "embedding_dim": 1536,
         "fine_tune": True
     },
     "miewid": {
@@ -105,4 +108,13 @@ evaluation = {
     "protocols": ["closed_set", "open_set"],
     "metrics": ["accuracy", "mAP", "BAKS", "BAUS"],
     "top_k": [1, 5, 10]
+}
+
+# Retrieval / experiment runner (src/evaluation/ablation.py)
+retrieval = {
+    "K": 100,            # shortlist size for vector-only configs (also the depth of mAP@K)
+    "K_local": 20,       # ALIKED/LightGlue is one matcher pass per pair, so only the best 20 candidates get it
+    "weight_step": 0.1,  # fusion-weight grid resolution
+    "feature_cache": "features",   # features/<branch dir>/shard_*.npy  (see features/extraction.py)
+    "results_dir": "results",
 }
