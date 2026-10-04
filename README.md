@@ -4,7 +4,9 @@
 
 This project investigates whether calibrated fusion of global (MiewID/MegaDescriptor), complementary (EVA02), and local (ALIKED) visual representations provides more reliable wildlife individual re-identification than any single representation alone on the WildlifeReID-10k benchmark.
 
----
+### Dataset
+
+The dataset is from [WildlifeReID-10k dataset](https://www.kaggle.com/datasets/wildlifedatasets/wildlifereid-10k).
 
 ## Group Name: MLM
 
