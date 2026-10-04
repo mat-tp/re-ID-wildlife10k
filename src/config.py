@@ -29,16 +29,26 @@ data = {
 models = {
     "global": {
         "name": "megadescriptor",
-        "variant": "L-384",            # Swin-L, 384px, 1536-d embedding      [PAPER: best MD flavour]
-        "embedding_dim": 1536,         # (skeleton said 2048 - that is wrong for Swin-L)
-        "init": "megadescriptor",      # or "imagenet" = leakage-free (DECISIONS.md #2)
-        "fine_tune": True,
-        "grad_checkpointing": True,    # lets Swin-L-384 fit on a 24 GB card  [PRACTICE]
+        "embedding_dim": 2048,
+        "fine_tune": True
     },
-    "miewid": {"hf_id": "conservationxlabs/miewid-msv3"},   # verify input size on the model card
-    "complementary": {"name": "eva02", "embedding_dim": 768},
-    "local": {"name": "aliked", "num_features": 1000},
-    "baseline": {"name": "dinov2_vits14"},
+    "miewid": {
+        "hf_id": "conservationxlabs/miewid-msv3"
+    },
+    "complementary": {
+        "name": "eva02",
+        "timm_id": "eva02_base_patch14_224.mim_in22k",
+        "embedding_dim": 768,
+        "global_pool": "avg",
+    },
+    "local": {
+        "name": "aliked",
+        "num_features": 1000
+    },
+    "baseline": {
+        "name": "dinov2_vits14",
+        "embedding_dim": 384,
+    },
 }
 
 augmentation = {
