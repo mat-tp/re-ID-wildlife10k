@@ -20,7 +20,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 
-from src.data_processing.splits import load_metadata, assign_roles, sampling_weights, TRAIN
+from src.data_processing.splits import load_metadata, assign_roles, sampling_weights, get_frames, TRAIN
 
 
 class WildlifeReID10kDataset(Dataset):
@@ -73,13 +73,6 @@ def make_eval_loader(df, transform, root="data", batch_size=64, num_workers=8):
     ds = WildlifeReID10kDataset(df, root, transform)      # labels not needed: identities live in df
     return DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers,
                       pin_memory=True, persistent_workers=num_workers > 0)
-
-
-def get_frames(cfg_data):
-    """One call the whole team can use: role-annotated metadata."""
-    v = cfg_data["val"]
-    return assign_roles(load_metadata(cfg_data["metadata_csv"]), v["unknown_id_fraction"],
-                        v["known_img_fraction"], v["min_ids_for_unknown"], seed=v["seed"])
 
 
 if __name__ == "__main__":

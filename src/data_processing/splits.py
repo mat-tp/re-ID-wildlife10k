@@ -119,3 +119,10 @@ def sampling_weights(identities, datasets, id_alpha=0.5, dataset_beta=0.25):
     n_ds = ds.map(ds.value_counts()).to_numpy(float)
     w = n_id ** (-id_alpha) * n_ds ** (-dataset_beta)
     return w / w.mean()
+
+
+def get_frames(cfg_data):
+    """One call the whole team can use: role-annotated metadata (torch-free; also re-exported by dataloader.py)."""
+    v = cfg_data["val"]
+    return assign_roles(load_metadata(cfg_data["metadata_csv"]), v["unknown_id_fraction"],
+                        v["known_img_fraction"], v["min_ids_for_unknown"], seed=v["seed"])
