@@ -1,100 +1,91 @@
 """
-This file handles:
-- Loading the WildlifeReID-10k dataset using the wildlife package
-- Accessing the provided Excel file containing dataset metadata
-- Applying animal detection and cropping (MegaDetector)
-- Creating train/test splits
-- Data augmentation and transformations
-- Batch loading for training and evaluation
+Dataset + DataLoader construction for WildlifeReID-10k.
 
-The WildlifeReID-10k dataset can be accessed using:
-    pip install wildlife
-    from wildlife.datasets import WildlifeReID10k
-
-In this file we will process the Excel file that is already provided about 
-the dataset to create proper data loaders for the pipeline.
-
-TODO: Implement animal detection and cropping pipeline
-TODO: Create data augmentation transforms
-TODO: Implement batch sampling strategies (balanced sampling for BAKS/BAUS)
+What changed versus the skeleton (and why):
+ * BUG FIX: cv2.imread returned None on a missing/corrupt file and cvtColor was called BEFORE the
+   None check, so the error message never appeared. Check first, convert after.
+ * Dataset now works on a *role-annotated* dataframe (see splits.py) so the same class serves
+   train / val / test / gallery, and returns (image, label_index, row_index):
+     - integer labels avoid a Python dict lookup per sample inside the training loop,
+     - row_index lets feature caches be aligned with the metadata rows (needed by the
+       calibration / fusion / evaluation people).
+ * Balanced sampling (WeightedRandomSampler) for training - see splits.sampling_weights.
+ * Animal detection: images are ALREADY cropped by the benchmark authors, so MegaDetector is
+   optional (config.data['use_megadetector']); see DECISIONS.md #3.
 """
-
 import os
+import cv2
+import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
-import cv2
-import matplotlib.pyplot as plt
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 
-
-# Creating a custom dataset class for WildLifeRe10k
+from src.data_processing.splits import load_metadata, assign_roles, sampling_weights, TRAIN
 
 
 class WildlifeReID10kDataset(Dataset):
-
-    def __init__(self, metadata_csv = "data/metadata.csv", root="data", transform=None, verbose=False):
-        self.data = pd.read_csv(metadata_csv, usecols=['path', 'identity', 'species', 'split', 'cluster_id', 'dataset'])
-
-        # dropping out the date column as it is not needed for the pipeline
-        # self.data = self.data.drop(columns=['date', 'orientation'])
-
-        # Visualize the data information
-        # print("Dataset Information:")
-        # print(self.data.info())
-        # print(self.data.columns)
-        # print(self.data.iloc[:, 2].head(20))
-        # print(self.data.iloc[:, 2].dtype)
-
-        self.root = root
-        self.transform = transform
-
-        self.paths = self.data['path'].tolist()
-        self.labels = self.data['identity'].tolist()
-        self.species = self.data['species'].tolist()
-
-        if verbose:
-            print(self.data.info())
-
+    def __init__(self, df, root="data", transform=None, label_map=None):
+        """
+        df         : dataframe with columns path, identity, species, dataset (+ role). Row order = dataset order.
+        label_map  : {identity: int}. Identities not in the map get -1 (val_unknown / test_unknown).
+        """
+        self.data = df.reset_index(drop=True)
+        self.root, self.transform = root, transform
+        self.paths = self.data["path"].tolist()
+        self.identities = self.data["identity"].tolist()
+        self.species = self.data["species"].tolist()
+        self.label_map = label_map or {}
+        self.labels = np.array([self.label_map.get(i, -1) for i in self.identities], dtype=np.int64)
 
     def __len__(self):
         return len(self.data)
 
-    def __getitem__(self, idx):
-        # Interested in the path, identity, and species.
-        # img_path = self.data.iloc[idx]['path']
-        # label = self.data.iloc[idx]['identity']
-        # species = self.data.iloc[idx]['species']
-
-        # Load image (assuming images are in a specific directory)
-        image = self.load_image(self.paths[idx])
-
-        if self.transform:
-            image = self.transform(image)
-
-        return image, self.labels[idx], self.species[idx]
-
     def load_image(self, rel_path):
+        full = os.path.join(self.root, rel_path)
+        img = cv2.imread(full, cv2.IMREAD_COLOR)           # uint8 BGR (alpha, if any, is dropped)
+        if img is None:
+            raise FileNotFoundError(f"Image not found / unreadable: {full}")
+        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-        full_path = os.path.join(self.root, rel_path)
-        # loading the image using OpenCV
-        image = cv2.imread(full_path) # uint8, BGR
+    def __getitem__(self, idx):
+        img = self.load_image(self.paths[idx])
+        if self.transform is not None:
+            img = self.transform(img)
+        return img, int(self.labels[idx]), idx
 
-        # Convert (default) BGR to RGB
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        if image is None:
-            raise FileNotFoundError(f"Image not found at path: {full_path}")
 
-        # isVisualize = False  # Set to True if you want to visualize the image
-        # if isVisualize:
-        #     plt.imshow(image)
-        #     plt.show()
+def build_label_map(train_df):
+    return {lab: i for i, lab in enumerate(sorted(train_df["identity"].unique()))}
 
-        return image
+
+def make_train_loader(train_df, transform, label_map, root="data", batch_size=16,
+                      id_alpha=0.5, dataset_beta=0.25, num_workers=8, seed=0):
+    ds = WildlifeReID10kDataset(train_df, root, transform, label_map)
+    w = sampling_weights(train_df["identity"], train_df["dataset"], id_alpha, dataset_beta)
+    g = torch.Generator().manual_seed(seed)
+    sampler = WeightedRandomSampler(torch.as_tensor(w, dtype=torch.double), num_samples=len(ds),
+                                    replacement=True, generator=g)     # 1 "epoch" = len(ds) draws
+    return DataLoader(ds, batch_size=batch_size, sampler=sampler, num_workers=num_workers,
+                      pin_memory=True, drop_last=True, persistent_workers=num_workers > 0)
+
+
+def make_eval_loader(df, transform, root="data", batch_size=64, num_workers=8):
+    ds = WildlifeReID10kDataset(df, root, transform)      # labels not needed: identities live in df
+    return DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers,
+                      pin_memory=True, persistent_workers=num_workers > 0)
+
+
+def get_frames(cfg_data):
+    """One call the whole team can use: role-annotated metadata."""
+    v = cfg_data["val"]
+    return assign_roles(load_metadata(cfg_data["metadata_csv"]), v["unknown_id_fraction"],
+                        v["known_img_fraction"], v["min_ids_for_unknown"], seed=v["seed"])
+
 
 if __name__ == "__main__":
-
-    ds = WildlifeReID10kDataset("data/metadata.csv", root="data", verbose=True)
+    import src.config as C
+    df = get_frames(C.data)
+    print(df.role.value_counts())
+    ds = WildlifeReID10kDataset(df[df.role == TRAIN], C.data["dataset_root"])
     img = ds.load_image(ds.paths[0])
-    print(img.shape, img.dtype)   # (H, W, 3) uint8
-
-    
+    print(img.shape, img.dtype)

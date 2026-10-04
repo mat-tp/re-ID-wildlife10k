@@ -1,42 +1,73 @@
 """
-This file handles all configuration settings for the entire pipeline including:
-- Data paths and preprocessing parameters
-- Model configurations (MiewID, MegaDescriptor, EVA02, ALIKED, DINOv2)
-- Feature extraction parameters
-- Calibration settings (isotonic regression, PCHIP interpolation)
-- Fusion weights and methods
-- Compression parameters (PCA)
-- Evaluation protocols (closed-set, open-set)
-- BAKS and BAUS metrics configuration
+Central configuration for the whole pipeline (plain dictionaries, as in the skeleton).
 
-TODO: Implement configuration loading and saving
-TODO: Add validation for configuration parameters
-TODO: Create default configurations for different experiments
+Every value that was chosen on purpose carries a tag that says WHY:
+  [PROPOSAL]  stated in docs/main.tex
+  [PAPER]     taken from a referenced paper (MegaDescriptor / WildlifeReID-10k / WildFusion ...)
+  [PRACTICE]  standard practice in the re-ID / metric-learning literature
+  [JUDGEMENT] our own starting point - MUST be tuned/checked on the validation split
+See DECISIONS.md for the long-form reasoning.
 """
 
-# Fill in your configurations here
-# Dictionary is used to represent the configurations (key-value) pairs.
 data = {
-    "dataset_root": "data/raw/WildlifeReID-10k", # The path which leads to the .excel file
+    # CSV paths look like "images/<dataset>/...", so images live at <root>/images/...
+    "dataset_root": "data",
+    "metadata_csv": "data/metadata.csv",
+    # Validation split is NOT provided by the benchmark, so we carve it out of `train`
+    # (see src/data_processing/splits.py).                                 [PROPOSAL: val for tuning]
+    "val": {
+        "unknown_id_fraction": 0.10,   # share of identities per dataset held out as "new animals"
+        "known_img_fraction": 0.10,    # share of images per identity held out as val queries (whole clusters)
+        "min_ids_for_unknown": 10,     # datasets with fewer train identities keep all of them
+        "seed": 0,
+    },
+    # Images in WildlifeReID-10k are already cropped to the animal by the authors. [PAPER]
+    # So MegaDetector is OFF by default (see DECISIONS.md #3).
+    "use_megadetector": False,
 }
 
 models = {
     "global": {
         "name": "megadescriptor",
-        "embedding_dim": 2048,
-        "fine_tune": True
+        "variant": "L-384",            # Swin-L, 384px, 1536-d embedding      [PAPER: best MD flavour]
+        "embedding_dim": 1536,         # (skeleton said 2048 - that is wrong for Swin-L)
+        "init": "megadescriptor",      # or "imagenet" = leakage-free (DECISIONS.md #2)
+        "fine_tune": True,
+        "grad_checkpointing": True,    # lets Swin-L-384 fit on a 24 GB card  [PRACTICE]
     },
-    "complementary": {
-        "name": "eva02",
-        "embedding_dim": 768
-    },
-    "local": {
-        "name": "aliked",
-        "num_features": 1000
-    },
-    "baseline": {
-        "name": "dinov2_vits14"
-    }
+    "miewid": {"hf_id": "conservationxlabs/miewid-msv3"},   # verify input size on the model card
+    "complementary": {"name": "eva02", "embedding_dim": 768},
+    "local": {"name": "aliked", "num_features": 1000},
+    "baseline": {"name": "dinov2_vits14"},
+}
+
+augmentation = {
+    "resize_mode": "squash",           # same as MegaDescriptor's own transform  [PAPER]
+    "random_resized_crop_scale": (0.75, 1.0),   # mild: identity cues must survive [JUDGEMENT]
+    "rotation_deg": 10,                                                          # [JUDGEMENT]
+    "color_jitter": dict(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.02),  # hue tiny: colour is identity cue
+    "gaussian_blur_p": 0.1,            # wild images are often soft / low-res     [JUDGEMENT]
+    "random_erasing_p": 0.25,          # occlusion robustness                    [PRACTICE: Luo et al. 2019]
+    "hflip_species": [],               # mirror flips create fake identities for asymmetric patterns -> off
+}
+
+sampling = {
+    "id_alpha": 0.5,       # weight ~ n_images_of_identity ** -alpha             [JUDGEMENT, sqrt rule]
+    "dataset_beta": 0.25,  # weight ~ n_images_of_dataset  ** -beta              [JUDGEMENT]
+}
+
+training = {
+    "optimizer": "sgd", "momentum": 0.9,     # [PAPER: MegaDescriptor]
+    "lr": 1e-3,                              # [PAPER: grid {0.01, 0.001}]
+    "head_lr_mult": 10.0,                    # ArcFace head starts random          [PRACTICE]
+    "weight_decay": 1e-4,                    # [JUDGEMENT] (skeleton used 0)
+    "schedule": "cosine", "warmup_epochs": 1,   # cosine [PAPER]; warm-up [PRACTICE]
+    "effective_batch": 128,                  # [PAPER]
+    "micro_batch": 16, "accum_steps": 8,     # 16*8=128 fits Swin-L-384 in fp16
+    "epochs": 12,                            # paper used 100 (~1 week/GPU); budget-limited [JUDGEMENT]
+    "arcface_margin": 0.5, "arcface_scale": 64.0,   # [PAPER grid {0.25,.5,.75}x{32,64,128}]
+    "grad_clip": 5.0,
+    "amp": True,
 }
 
 # These should sum up to one.
@@ -46,15 +77,18 @@ fusion_weights = {
     "local_weight": 0.3,
     "method": "weighted_sum"
 }
-    
+
 calibration = {
     "method": "isotonic",  # or "pchip"
     "use_validation": True
 }
-    
+
 compression = {
     "method": "pca",
-    "target_dim": 256
+    "target_dims": [32, 64, 128, 256, 512],   # sweep; None = uncompressed reference [PROPOSAL]
+    "target_dim": 256,
+    "whiten": True,                            # [PRACTICE: Jegou & Chum 2012] - ablate on/off
+    "fit_on": "train",                         # [PROPOSAL: PCA fitted on training data]
 }
 
 evaluation = {
