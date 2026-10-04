@@ -1,22 +1,22 @@
 """
-Metrics for closed-set and open-set Re-ID (numpy only).
+Metrics for closed-set and open-set Re-ID .
 
-Implemented here because the global-model comparison (MiewID vs fine-tuned MegaDescriptor,
-proposal RQ-i) and the threshold tau must be judged with the SAME metric as the benchmark:
+The global-model comparison (MiewID vs fine-tuned MegaDescriptor) and the threshold tau must be judged with the SAME metric as the benchmark:
 
   BAKS = mean over datasets of ( mean over known identities of ( mean over images of 1[correct] ) )
-  BAUS = mean over datasets of ( mean over unknown images of 1[predicted 'new'] )
+  BAUS = mean over datasets of ( mean over unknown images of 1[predicted 'new'] ) )
   closed-set score   = BAKS on known queries only (unknown queries ignored)   [WildlifeReID-10k, Sec 5.2]
   open-set score     = (BAKS + BAUS) / 2  ("normalised balanced accuracy")     [WildlifeReID-10k, Sec 5.2]
 
-Prediction rule (both papers): 1-nearest-neighbour by cosine similarity against the gallery;
+Prediction rule: 1-nearest-neighbour by cosine similarity against the gallery;
 open-set -> answer "new individual" when the best similarity < tau.
 
-Note: the paper divides by D (all datasets). Some datasets have no unknown test images, so we
-average over the datasets that actually contain the relevant queries - state this in the report.
+Some datasets have no unknown test images, so we
+average over the datasets that actually contain the relevant queries.
 """
 import numpy as np
 
+# Label for new (unknown) individuals
 NEW = "__new__"
 
 
@@ -33,7 +33,8 @@ def nearest_neighbour(q, g, g_labels, chunk=512):
 
 
 def topk_identity_accuracy(q, g, g_labels, q_labels, ks=(1, 5, 10), chunk=256):
-    """Plain top-k (k distinct identities). Not balanced - report next to BAKS, never instead."""
+    """ top-k (k distinct identities). Not balanced, return dict of accuracy per k."""
+
     g_labels = np.asarray(g_labels); q_labels = np.asarray(q_labels)
     hits = {k: 0 for k in ks}; gt = np.ascontiguousarray(g.T); kmax = max(ks)
     for a in range(0, len(q), chunk):
@@ -138,3 +139,43 @@ def evaluate_open_set_per_group(best_sim, pred, true, datasets, is_known, groups
     accepted = np.asarray(best_sim) >= tau_q
     b = G.baks((np.asarray(pred) == np.asarray(true)) & accepted); u = G.baus(~accepted)
     return {"BAKS": b, "BAUS": u, "NBA": float(np.nanmean([b, u]))}
+
+
+# Metrics computed from a ranked shortlist (retrieval.search.Ranked): top-k identity accuracy and mAP@K
+def ranked_topk_accuracy(ranked_ids, true, is_known, ks=(1, 5, 10)):
+    """ranked_ids: (Nq,K) identity of each candidate image, best first. Known queries only.
+    Hit@k = true identity among the first k DISTINCT identities."""
+    ranked_ids = np.asarray(ranked_ids); true = np.asarray(true)
+    kn = np.flatnonzero(is_known); hits = {k: 0 for k in ks}
+    for i in kn:
+        seen = []
+        for lab in ranked_ids[i]:
+            if lab not in seen:
+                seen.append(lab)
+            if len(seen) >= max(ks):
+                break
+        for k in ks:
+            hits[k] += true[i] in seen[:k]
+    return {k: hits[k] / max(len(kn), 1) for k in ks}
+
+
+def ranked_average_precision(ranked_ids, true, n_pos):
+    """AP@K per query. n_pos[i] = number of gallery images of the true identity; the denominator is
+    min(n_pos, K) so a perfect ranking scores 1 even though the list is truncated. Unknown queries -> nan."""
+    rel = (np.asarray(ranked_ids) == np.asarray(true)[:, None]).astype(np.float64)
+    K = rel.shape[1]
+    prec = np.cumsum(rel, 1) / np.arange(1, K + 1)
+    denom = np.minimum(np.asarray(n_pos, float), K)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ap = (prec * rel).sum(1) / denom
+    ap[denom == 0] = np.nan
+    return ap
+
+
+def dataset_balanced_mean(values, datasets, mask):
+    """Mean of per-dataset means over the queries selected by `mask` (every dataset counts equally)."""
+    values, datasets = np.asarray(values, float)[mask], np.asarray(datasets)[mask]
+    if len(values) == 0:
+        return float("nan")
+    return float(np.mean([np.nanmean(values[datasets == d]) for d in np.unique(datasets)
+                          if not np.all(np.isnan(values[datasets == d]))]))

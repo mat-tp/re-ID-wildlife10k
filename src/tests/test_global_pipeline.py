@@ -1,4 +1,4 @@
-"""Torch-free checks: python tests_global_pipeline.py   (run from the project root)"""
+"""Torch-free checks: python -m src.tests.test_global_pipeline   (run from the project root)"""
 import numpy as np, pandas as pd
 from src.data_processing.splits import *
 from src.retrieval.metrics import *

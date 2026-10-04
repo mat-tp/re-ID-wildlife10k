@@ -1,95 +1,46 @@
 """
-Feature extraction and disk-caching pipeline for all model types.
+Feature extraction with resumable disk caching.
 
-Works with any model that exposes eval_transform() and embed():
-- GlobalModel      (global_models.py)        - MegaDescriptor
-- ComplementaryModel (complementary_models.py) - EVA02
-- DINOv2Baseline   (complementary_models.py)   - DINOv2 baseline
+REWRITTEN: the skeleton version filtered on a `split` column of a dataset that no longer exists in that form and
+expected (labels, species) from the loader, but the loader returns (image, label, row_index). It would have crashed.
 
-Extracted embeddings are saved to .pt files so inference only runs once
-across experiments on the 140k image gallery.
+New design: embed EVERY row of the metadata frame ONCE per model (140,488 images, order = metadata order) and store
+float16 shards. Every experiment (val/test, any gallery) is then just numpy indexing on these arrays - nothing is
+re-extracted when we change split, gallery or PCA size. Shards make a multi-hour run restartable.
+
+    feats = extract_all(model, df, root, "features/megadescriptor_L384")     # (N, d) float32, aligned with df.index
 """
-
 import os
-import torch
-from torch.utils.data import DataLoader, Subset
-
-# Reuse the existing batch extraction loop from global_models rather than duplicating it
-from src.models.global_models import extract_features
+import numpy as np
 
 
-# Extract embeddings for a dataset split and cache them to disk
-def extract_and_cache(
-    model,
-    dataset,
-    split: str,
-    cache_path: str,
-    *,
-    batch_size: int = 32,
-    num_workers: int = 4,
-    device=None,
-    amp: bool = True,
-    overwrite: bool = False,
-):
-    # Load from cache if it already exists
-    if os.path.isfile(cache_path) and not overwrite:
-        print(f"[extraction] Loading cached features from {cache_path}")
-        saved = torch.load(cache_path, map_location="cpu")
-        return saved["feats"], (saved["labels"], saved["species"])
-
-    # Filter dataset rows to the requested split
-    split_mask = dataset.data["split"] == split
-    indices = dataset.data.index[split_mask].tolist()
-
-    if len(indices) == 0:
-        raise ValueError(
-            f"No rows found for split='{split}'. "
-            f"Available splits: {dataset.data['split'].unique().tolist()}"
-        )
-
-    print(
-        f"[extraction] Running inference on {len(indices)} images "
-        f"(split='{split}') -> {cache_path}"
-    )
-
-    # Build a DataLoader over the selected subset
-    subset = Subset(dataset, indices)
-    loader = DataLoader(
-        subset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        pin_memory=(device != "cpu"),
-        shuffle=False,
-    )
-
-    # Run batch inference using the shared extraction loop
-    model.eval()
-    feats, extras = extract_features(model, loader, device=device, amp=amp)
-
-    # WildlifeReID10kDataset returns (image, label, species) so extras = (labels, species)
-    labels  = list(extras[0]) if extras else []
-    species = list(extras[1]) if len(extras) > 1 else []
-
-    # Save to disk
-    os.makedirs(os.path.dirname(os.path.abspath(cache_path)), exist_ok=True)
-    torch.save(
-        {"feats": feats, "labels": labels, "species": species, "split": split},
-        cache_path,
-    )
-    print(
-        f"[extraction] Saved {feats.shape[0]} embeddings "
-        f"(dim={feats.shape[1]}) to {cache_path}"
-    )
-
-    return feats, (labels, species)
+def extract_all(model, df, root, cache_dir, *, shard_size=10_000, batch_size=64, num_workers=8,
+                amp=True, device=None, overwrite=False):
+    from src.data_processing.dataloader import make_eval_loader      # lazy: keeps this module torch-free to import
+    from src.models.global_models import extract_features
+    os.makedirs(cache_dir, exist_ok=True)
+    df = df.reset_index(drop=True)
+    tf = model.eval_transform()
+    parts = []
+    for a in range(0, len(df), shard_size):
+        f = os.path.join(cache_dir, f"shard_{a:07d}.npy")
+        if overwrite or not os.path.isfile(f):
+            print(f"[extraction] rows {a}-{min(a + shard_size, len(df))} / {len(df)} -> {f}")
+            loader = make_eval_loader(df.iloc[a:a + shard_size], tf, root, batch_size, num_workers)
+            feats, _ = extract_features(model, loader, device=device, amp=amp)
+            np.save(f + ".tmp.npy", feats.numpy().astype(np.float16))
+            os.replace(f + ".tmp.npy", f)                          # a half-written shard is never mistaken for a finished one
+        parts.append(np.load(f))
+    return np.concatenate(parts).astype(np.float32)
 
 
-# Load a previously saved cache file directly
-def load_cached(cache_path: str):
-    if not os.path.isfile(cache_path):
-        raise FileNotFoundError(
-            f"Cache file not found: {cache_path}. "
-            "Run extract_and_cache() first."
-        )
-    saved = torch.load(cache_path, map_location="cpu")
-    return saved["feats"], (saved["labels"], saved["species"])
+def load_features(cache_root, names):
+    """names: {branch: sub-directory name}. Returns {branch: (N,d) float32}."""
+    out = {}
+    for branch, sub in names.items():
+        d = os.path.join(cache_root, sub)
+        shards = sorted(f for f in os.listdir(d) if f.startswith("shard_") and f.endswith(".npy") and "tmp" not in f)
+        if not shards:
+            raise FileNotFoundError(f"no shards in {d} - run extract_all first")
+        out[branch] = np.concatenate([np.load(os.path.join(d, s)) for s in shards]).astype(np.float32)
+    return out
