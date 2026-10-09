@@ -120,11 +120,85 @@ with tab_res:
 #  train
 with tab_train:
     st.subheader("Fine-tune MegaDescriptor")
-    st.info("TODO (planned): this tab will launch `fine_tune()` from src/models/global_models.py.")
-    st.markdown("""
-- [ ] Form: backbone variant (L-384 / B-224 / T-224), init (megadescriptor / imagenet), epochs, lr, batch, ArcFace margin/scale
-- [ ] Run training in a background process; stream the log + loss curve into this tab
-- [ ] Show validation score per checkpoint (closed BAKS, open NBA) and mark the best one
-- [ ] Button: "Use this checkpoint" -> re-extract global features -> refresh Results
-""")
-    st.button("Start training", disabled=True)
+    
+    # 1. The Form
+    c1, c2, c3 = st.columns(3)
+    variant = c1.selectbox("Backbone Variant", ["T-224", "B-224", "L-384"], index=0)
+    init = c2.selectbox("Initialization", ["megadescriptor", "imagenet"], index=1)
+    epochs = c3.number_input("Epochs", min_value=1, value=12)
+    
+    c4, c5, c6 = st.columns(3)
+    lr = c4.number_input("Learning Rate", min_value=0.0, value=1e-3, format="%.4f")
+    batch_size = c5.number_input("Micro Batch Size", min_value=1, value=16)
+    margin = c6.number_input("ArcFace Margin", min_value=0.0, value=0.5)
+    
+    if st.button("Start training", type="primary"):
+        st.info("Training initiated... (Waiting for logs)")
+        
+        # Placeholders for real-time UI updates
+        log_container = st.empty()
+        chart_container = st.empty()
+        val_container = st.empty()
+        
+        # Setup threading and queue
+        import threading
+        import queue
+        import contextlib
+        import io
+        import re
+        
+        log_queue = queue.Queue()
+        
+        class QueueWriter(io.StringIO):
+            def write(self, s):
+                if s.strip():
+                    log_queue.put(s.strip())
+                return len(s)
+                
+        def run_training():
+            # Dynamically override the config
+            C.models["global"]["variant"] = variant
+            C.models["global"]["init"] = init
+            C.training["epochs"] = epochs
+            C.training["lr"] = lr
+            C.training["micro_batch"] = batch_size
+            C.training["arcface_margin"] = margin
+            
+            # Run the actual experiment script and intercept prints
+            with contextlib.redirect_stdout(QueueWriter()):
+                try:
+                    from src.models.run_global_experiments import main
+                    main("fine_tune", "megadescriptor")
+                except Exception as e:
+                    log_queue.put(f"ERROR: {str(e)}")
+        
+        thread = threading.Thread(target=run_training)
+        thread.start()
+        
+        # Real-time listener loop
+        logs, losses, vals = [], [], []
+        import time
+        while thread.is_alive() or not log_queue.empty():
+            while not log_queue.empty():
+                msg = log_queue.get()
+                logs.append(msg)
+                
+                # Parse Loss
+                loss_match = re.search(r"loss (\d+\.\d+)", msg)
+                if loss_match:
+                    losses.append(float(loss_match.group(1)))
+                    chart_container.line_chart(losses)
+                
+                # Parse Validation
+                if "validation score" in msg:
+                    val_match = re.search(r"validation score: (\d+\.\d+)", msg)
+                    if val_match:
+                        vals.append(float(val_match.group(1)))
+                        val_container.dataframe(pd.DataFrame({"Validation NBA": vals}))
+                
+                # Keep logs reasonably small
+                log_container.code("\n".join(logs[-10:]))
+                
+            time.sleep(0.1)
+            
+        st.success("Training background process concluded.")
