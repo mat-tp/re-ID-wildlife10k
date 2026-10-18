@@ -1,38 +1,65 @@
 """
-    Who is gallery and who is query, for VALIDATION (tuning) and TEST (final, run once).
-
- validation : gallery = role 'train'                      queries = val_known + val_unknown
- test       : gallery = EVERY row with split == 'train'   queries = test_known + test_unknown
-              (= train + val_known + val_unknown. The benchmark's gallery is its whole train split. If we left the
-               validation rows out, a test image of a val_unknown animal would be called 'known' by the benchmark
-               but have no gallery image -> unfairly counted wrong.)
-Ground truth for an unknown query is NEW ('__new__').
+Protocol definition module for wildlife re-identification.
+Establishes gallery and query set configurations for validation tuning and final testing phases.
 """
 from dataclasses import dataclass
+from typing import Tuple
 import numpy as np
-from src.data_processing.splits import (TRAIN, VAL_KNOWN, VAL_UNKNOWN, TEST_KNOWN, TEST_UNKNOWN, NEW)
+import pandas as pd
+from src.data_processing.splits import (
+    TRAIN,
+    VAL_KNOWN,
+    VAL_UNKNOWN,
+    TEST_KNOWN,
+    TEST_UNKNOWN,
+    NEW
+)
 
 
 @dataclass
 class QuerySet:
-    rows: np.ndarray       # metadata row ids of the queries
-    true: np.ndarray       # identity or NEW
-    known: np.ndarray      # bool
+    """Container holding metadata and ground truth labels for query evaluation batches."""
+    rows: np.ndarray
+    true: np.ndarray
+    known: np.ndarray
     datasets: np.ndarray
     species: np.ndarray
 
 
-def _qs(df, mask):
-    q = df[mask]
-    known = q.role.isin([VAL_KNOWN, TEST_KNOWN]).to_numpy()
-    return QuerySet(q.index.to_numpy(), np.where(known, q.identity.to_numpy(), NEW), known,
-                    q.dataset.to_numpy(), q.species.to_numpy())
+def _create_query_set(dataframe: pd.DataFrame, mask: np.ndarray) -> QuerySet:
+    """Constructs a QuerySet data container from filtered metadata subset masks."""
+    query_subset = dataframe[mask]
+    known_mask = query_subset.role.isin([VAL_KNOWN, TEST_KNOWN]).to_numpy()
+    true_identities = np.where(known_mask, query_subset.identity.to_numpy(), NEW)
+    
+    return QuerySet(
+        rows=query_subset.index.to_numpy(),
+        true=true_identities,
+        known=known_mask,
+        datasets=query_subset.dataset.to_numpy(),
+        species=query_subset.species.to_numpy()
+    )
 
 
-def protocol(df, split="val"):
-    """Returns (gallery_rows, QuerySet). df must be the role-annotated frame from get_frames()."""
+def define_evaluation_protocol(dataframe: pd.DataFrame, split: str = "val") -> Tuple[np.ndarray, QuerySet]:
+    """
+    Determines gallery indices and constructs the query set for validation or testing protocols.
+    
+    Validation uses the training split for the gallery and evaluation subsets for queries.
+    Testing uses the full benchmark training split as the gallery to prevent open-set evaluation bias.
+    """
     if split == "val":
-        return df.index[df.role == TRAIN].to_numpy(), _qs(df, df.role.isin([VAL_KNOWN, VAL_UNKNOWN]))
+        gallery_indices = dataframe.index[dataframe.role == TRAIN].to_numpy()
+        query_mask = dataframe.role.isin([VAL_KNOWN, VAL_UNKNOWN])
+        return gallery_indices, _create_query_set(dataframe, query_mask)
+        
     if split == "test":
-        return df.index[df.split == "train"].to_numpy(), _qs(df, df.role.isin([TEST_KNOWN, TEST_UNKNOWN]))
-    raise ValueError(split)
+        gallery_indices = dataframe.index[dataframe.split == "train"].to_numpy()
+        query_mask = dataframe.role.isin([TEST_KNOWN, TEST_UNKNOWN])
+        return gallery_indices, _create_query_set(dataframe, query_mask)
+        
+    raise ValueError(f"Unsupported evaluation protocol split: {split}")
+
+
+# Backwards compatibility alias
+protocol = define_evaluation_protocol

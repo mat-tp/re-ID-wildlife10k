@@ -1,18 +1,12 @@
 """
-End-to-end experiment runner: shortlist -> score every branch -> calibrate -> fuse -> closed/open-set metrics.
-
-Order of operations (all choices made on VALIDATION, then frozen):
-  1. fit one ScoreCalibrator per branch on validation (query, candidate) pairs      (calibration)
-  2. per configuration: tune fusion weights on validation (grid, objective = open-set NBA)  (fusion)
-  3. per configuration: pick tau (and optional per-species taus) on validation              (open set)
-  4. evaluate on validation (reported) and - only when asked - on the TEST protocol with 1-3 frozen.
-
-A configuration is a tuple of branch names, e.g. ("global",), ("global","complementary"), ("global","local").
-'local' is special: it is only ever computed on the K_local best candidates of a cheap branch.
+End-to-end experiment runner module for wildlife re-identification.
+Executes shortlisting, branch scoring, calibration, fusion, and evaluation workflows.
 """
 import time
+from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
+
 from src.retrieval.search import rank_by_embedding, Ranked
 from src.retrieval.similarity import candidate_cosine
 from src.retrieval.metrics import best_threshold
@@ -25,136 +19,284 @@ from src.evaluation.open_set import select_tau, evaluate_open_set
 LOCAL = "local"
 
 
-def config_name(branches):
+def get_configuration_name(branches: Tuple[str, ...]) -> str:
+    """Combines branch names into a unique configuration identifier string."""
     return "+".join(branches)
 
 
-def compress_features(feats, df, dim, whiten=True, fit_rows=None):
-    """PCA per branch, fitted on TRAIN rows only (RQ4). dim=None -> unchanged reference."""
-    if dim is None:
-        return feats
+def compress_feature_branches(
+    features: Dict[str, np.ndarray],
+    dataframe: pd.DataFrame,
+    dimensionality: Optional[int],
+    whiten: bool = True,
+    fit_rows: Optional[np.ndarray] = None
+) -> Dict[str, np.ndarray]:
+    """Applies PCA compression per feature branch, fitted exclusively on training rows to prevent leakage."""
+    if dimensionality is None:
+        return features
+        
     from src.compression.pca import PCACompressor
-    rows = fit_rows if fit_rows is not None else df.index[df.role == "train"].to_numpy()
-    return {b: PCACompressor(dim, whiten).fit(x[rows]).transform(x) for b, x in feats.items()}
+    training_rows = fit_rows if fit_rows is not None else dataframe.index[dataframe.role == "train"].to_numpy()
+    
+    return {
+        branch: PCACompressor(dimensionality, whiten).fit(feat_matrix[training_rows]).transform(feat_matrix)
+        for branch, feat_matrix in features.items()
+    }
 
 
 class Experiment:
-    def __init__(self, df, feats, local_scorer=None, K=100, K_local=20, calibration="isotonic",
-                 weight_step=0.1, max_cal_queries=4000, seed=0):
-        self.df, self.feats, self.local = df, feats, local_scorer
-        self.K, self.K_local, self.step = K, K_local, weight_step
-        self.method, self.max_cal_q, self.seed = calibration, max_cal_queries, seed
-        self.g_val, self.q_val = protocol(df, "val")
-        self._prep, self.cal = {}, {}
+    """Manages end-to-end evaluation, calibration, weight tuning, and ablation studies."""
 
-    # stage 1 + 2 (raw scores)
-    def _prepare(self, split, branches):
-        g_rows, q = (self.g_val, self.q_val) if split == "val" else protocol(self.df, "test")
-        key = (split, tuple(branches))
-        if key in self._prep:
-            return self._prep[key]
-        cheap = [b for b in branches if b != LOCAL]
-        sl = cheap[0] if cheap else ("global" if "global" in self.feats else next(iter(self.feats)))
-        K = self.K_local if LOCAL in branches else self.K
-        t0 = time.perf_counter()
-        ranked = rank_by_embedding(self.feats[sl][q.rows], self.feats[sl][g_rows], K)
-        raw = {}
-        for b in branches:
-            if b == sl:
-                raw[b] = ranked.score
-            elif b == LOCAL:
-                if self.local is None:
-                    raise RuntimeError("config uses 'local' but no LocalScorer was given")
-                raw[b] = self.local.score_pairs(q.rows, g_rows[ranked.cand])
+    def __init__(
+        self,
+        dataframe: pd.DataFrame = None,
+        features: Dict[str, np.ndarray] = None,
+        local_scorer=None,
+        k_candidates: int = 100,
+        k_local_candidates: int = 20,
+        calibration_method: str = "isotonic",
+        weight_step: float = 0.1,
+        max_calibration_queries: int = 4000,
+        seed: int = 0,
+        **kwargs
+    ):
+        if dataframe is None and "df" in kwargs:
+            dataframe = kwargs.pop("df")
+        if features is None and "feats" in kwargs:
+            features = kwargs.pop("feats")
+        if "K" in kwargs:
+            k_candidates = kwargs.pop("K")
+        if "K_local" in kwargs:
+            k_local_candidates = kwargs.pop("K_local")
+        if "calibration" in kwargs:
+            calibration_method = kwargs.pop("calibration")
+        if "max_cal_queries" in kwargs:
+            max_calibration_queries = kwargs.pop("max_cal_queries")
+        if "step" in kwargs:
+            weight_step = kwargs.pop("step")
+
+        self.dataframe = dataframe
+        self.features = features
+        self.local_scorer = local_scorer
+        self.k_candidates = k_candidates
+        self.k_local_candidates = k_local_candidates
+        self.weight_step = weight_step
+        self.calibration_method = calibration_method
+        self.max_calibration_queries = max_calibration_queries
+        self.seed = seed
+        
+        self.gallery_val, self.query_val = protocol(dataframe, "val")
+        self._prepared_cache = {}
+        self.calibrators = {}
+        # Backwards compatibility attributes
+        self.df = self.dataframe
+        self.feats = self.features
+        self.local = self.local_scorer
+        self.K = self.k_candidates
+        self.K_local = self.k_local_candidates
+        self.step = self.weight_step
+        self.cal = self.calibrators
+
+    def _prepare_evaluation_splits(self, split: str, branches: Tuple[str, ...]) -> dict:
+        """Prepares gallery rows, query sets, candidate shortlists, and raw branch scores."""
+        gallery_rows, query_info = (self.gallery_val, self.query_val) if split == "val" else protocol(self.dataframe, "test")
+        cache_key = (split, tuple(branches))
+        
+        if cache_key in self._prepared_cache:
+            return self._prepared_cache[cache_key]
+            
+        cheap_branches = [branch for branch in branches if branch != LOCAL]
+        shortest_branch = cheap_branches[0] if cheap_branches else ("global" if "global" in self.features else next(iter(self.features)))
+        k_limit = self.k_local_candidates if LOCAL in branches else self.k_candidates
+        
+        timer_start = time.perf_counter()
+        ranked = rank_by_embedding(self.features[shortest_branch][query_info.rows], self.features[shortest_branch][gallery_rows], k_limit)
+        
+        raw_scores = {}
+        for branch in branches:
+            if branch == shortest_branch:
+                raw_scores[branch] = ranked.score
+            elif branch == LOCAL:
+                if self.local_scorer is None:
+                    raise RuntimeError("Configuration specifies 'local' branch but no local scorer was provided.")
+                raw_scores[branch] = self.local_scorer.score_pairs(query_info.rows, gallery_rows[ranked.cand])
             else:
-                raw[b] = candidate_cosine(self.feats[b][q.rows], self.feats[b][g_rows], ranked.cand)
-        out = dict(g_rows=g_rows, q=q, cand=ranked.cand, raw=raw, g_ids=self.df.identity.to_numpy()[g_rows],
-                   ms_per_query=1000 * (time.perf_counter() - t0) / max(len(q.rows), 1))
-        self._prep[key] = out
-        return out
+                raw_scores[branch] = candidate_cosine(self.features[branch][query_info.rows], self.features[branch][gallery_rows], ranked.cand)
+                
+        elapsed_time_ms = 1000 * (time.perf_counter() - timer_start)
+        gallery_identities = self.dataframe.identity.to_numpy()[gallery_rows]
+        
+        prepared_data = {
+            "g_rows": gallery_rows,
+            "q": query_info,
+            "cand": ranked.cand,
+            "raw": raw_scores,
+            "g_ids": gallery_identities,
+            "ms_per_query": elapsed_time_ms / max(len(query_info.rows), 1)
+        }
+        
+        self._prepared_cache[cache_key] = prepared_data
+        return prepared_data
 
-    #  calibration
-    def fit_calibrators(self, branches=None):
-        branches = branches or sorted({b for b in self.feats} | ({LOCAL} if self.local else set()))
+    def fit_score_calibrators(self, branches: Optional[List[str]] = None) -> "Experiment":
+        """Fits score calibrators for each feature branch using validation pairs."""
+        branches = branches or sorted({b for b in self.features} | ({LOCAL} if self.local_scorer else set()))
         rng = np.random.default_rng(self.seed)
-        for b in branches:
-            sl_cfg = (b,) if b != LOCAL else ("global", LOCAL) if "global" in self.feats else (next(iter(self.feats)), LOCAL)
-            P = self._prepare("val", sl_cfg)
-            same = (P["g_ids"][P["cand"]] == P["q"].true[:, None]) & P["q"].known[:, None]
-            qi = np.arange(len(same))
-            if len(qi) > self.max_cal_q:
-                qi = rng.choice(qi, self.max_cal_q, replace=False)
-            self.cal[b] = ScoreCalibrator(self.method).fit(P["raw"][b][qi], same[qi])
+        
+        for branch in branches:
+            branch_cfg = (branch,) if branch != LOCAL else ("global", LOCAL) if "global" in self.features else (next(iter(self.features)), LOCAL)
+            prepared_data = self._prepare_evaluation_splits("val", branch_cfg)
+            
+            matches = (prepared_data["g_ids"][prepared_data["cand"]] == prepared_data["q"].true[:, None]) & prepared_data["q"].known[:, None]
+            query_indices = np.arange(len(matches))
+            
+            if len(query_indices) > self.max_calibration_queries:
+                query_indices = rng.choice(query_indices, self.max_calibration_queries, replace=False)
+                
+            self.calibrators[branch] = ScoreCalibrator(self.calibration_method).fit(
+                prepared_data["raw"][branch][query_indices], matches[query_indices]
+            )
+            
         return self
 
-    # one configuration
-    def _calibrated(self, P, branches):
-        return {b: self.cal[b].transform(P["raw"][b]) for b in branches}
+    def _apply_calibrations(self, prepared_data: dict, branches: Tuple[str, ...]) -> Dict[str, np.ndarray]:
+        """Applies fitted score calibrators to raw branch scores."""
+        return {branch: self.calibrators[branch].transform(prepared_data["raw"][branch]) for branch in branches}
 
-    def run_config(self, branches, weights=None, objective="NBA", per_species_tau=False, test=False):
+    def run_configuration(
+        self,
+        branches: List[str],
+        weights: Optional[dict] = None,
+        objective: str = "NBA",
+        per_species_tau: bool = False,
+        test: bool = False
+    ) -> dict:
+        """Evaluates a single feature branch configuration, tuning weights and decision thresholds on validation."""
         branches = tuple(branches)
-        if not self.cal:
-            self.fit_calibrators()
-        P = self._prepare("val", branches)
-        cal = self._calibrated(P, branches)
+        if not self.calibrators:
+            self.fit_score_calibrators()
+            
+        prepared_data = self._prepare_evaluation_splits("val", branches)
+        calibrated_scores = self._apply_calibrations(prepared_data, branches)
 
-        def obj(fused):
-            r = Ranked(P["cand"], fused).resort(fused)
-            s, p = r.score[:, 0], P["g_ids"][r.cand[:, 0]]
+        def objective_function(fused_scores: np.ndarray) -> float:
+            ranked_res = Ranked(prepared_data["cand"], fused_scores).resort(fused_scores)
+            scores, predictions = ranked_res.score[:, 0], prepared_data["g_ids"][ranked_res.cand[:, 0]]
             if objective == "BAKS":
                 from src.retrieval.metrics import closed_set_baks
-                return closed_set_baks(s, p, P["q"].true, P["q"].datasets, P["q"].known)
-            return best_threshold(s, p, P["q"].true, P["q"].datasets, P["q"].known, n_thresholds=60)["NBA"]
+                return closed_set_baks(scores, predictions, prepared_data["q"].true, prepared_data["q"].datasets, prepared_data["q"].known)
+            return best_threshold(scores, predictions, prepared_data["q"].true, prepared_data["q"].datasets, prepared_data["q"].known, n_thresholds=60)["NBA"]
 
-        w = normalise_weights(weights) if weights else tune_weights(cal, obj, self.step)[0]
-        ranked = Ranked(P["cand"], fuse(cal, w)); ranked = ranked.resort(ranked.score)
-        best = select_tau(ranked, P["g_ids"], P["q"], per_species=per_species_tau)
-        row = {"config": config_name(branches), "weights": {k: round(v, 3) for k, v in w.items()},
-               "K": ranked.cand.shape[1], "tau": best["tau"], "ms_per_query": round(P["ms_per_query"], 2)}
-        row.update({f"val_{k}": v for k, v in evaluate_closed_set(ranked, P["g_ids"], P["q"]).items()
-                    if k != "per_dataset"})
-        row.update({"val_open_BAKS": best["BAKS"], "val_open_BAUS": best["BAUS"], "val_open_NBA": best["NBA"]})
-        if test:                                                  # frozen: weights, calibrators, tau all from validation
-            T = self._prepare("test", branches)
-            rt = Ranked(T["cand"], fuse(self._calibrated(T, branches), w)); rt = rt.resort(rt.score)
-            row.update({f"test_{k}": v for k, v in evaluate_closed_set(rt, T["g_ids"], T["q"]).items()
-                        if k != "per_dataset"})
-            o = evaluate_open_set(rt, T["g_ids"], T["q"], best["tau"], best.get("species_tau"))
-            row.update({"test_open_BAKS": o["BAKS"], "test_open_BAUS": o["BAUS"], "test_open_NBA": o["NBA"]})
-        row["_species_tau"] = best.get("species_tau")
-        return row
+        optimal_weights = normalise_weights(weights) if weights else tune_weights(calibrated_scores, objective_function, self.weight_step)[0]
+        
+        fused_validation = fuse(calibrated_scores, optimal_weights)
+        ranked_val = Ranked(prepared_data["cand"], fused_validation)
+        ranked_val = ranked_val.resort(ranked_val.score)
+        
+        best_thresholds = select_tau(ranked_val, prepared_data["g_ids"], prepared_data["q"], per_species=per_species_tau)
+        
+        row_results = {
+            "config": get_configuration_name(branches),
+            "weights": {key: round(val, 3) for key, val in optimal_weights.items()},
+            "K": ranked_val.cand.shape[1],
+            "tau": best_thresholds["tau"],
+            "ms_per_query": round(prepared_data["ms_per_query"], 2)
+        }
+        
+        row_results.update({
+            f"val_{key}": val for key, val in evaluate_closed_set(ranked_val, prepared_data["g_ids"], prepared_data["q"]).items()
+            if key != "per_dataset"
+        })
+        row_results.update({
+            "val_open_BAKS": best_thresholds["BAKS"],
+            "val_open_BAUS": best_thresholds["BAUS"],
+            "val_open_NBA": best_thresholds["NBA"]
+        })
+        
+        if test:
+            test_data = self._prepare_evaluation_splits("test", branches)
+            fused_test = fuse(self._apply_calibrations(test_data, branches), optimal_weights)
+            ranked_test = Ranked(test_data["cand"], fused_test)
+            ranked_test = ranked_test.resort(ranked_test.score)
+            
+            row_results.update({
+                f"test_{key}": val for key, val in evaluate_closed_set(ranked_test, test_data["g_ids"], test_data["q"]).items()
+                if key != "per_dataset"
+            })
+            open_results = evaluate_open_set(ranked_test, test_data["g_ids"], test_data["q"], best_thresholds["tau"], best_thresholds.get("species_tau"))
+            row_results.update({
+                "test_open_BAKS": open_results["BAKS"],
+                "test_open_BAUS": open_results["BAUS"],
+                "test_open_NBA": open_results["NBA"]
+            })
+            
+        row_results["_species_tau"] = best_thresholds.get("species_tau")
+        return row_results
 
-    def ablation(self, configs, fixed_weights=None, test=False, **kw):
+    def run_ablation_study(self, configurations: List[List[str]], fixed_weights: Optional[dict] = None, test: bool = False, **kwargs) -> pd.DataFrame:
+        """Executes ablation experiments across a list of branch configurations."""
         fixed_weights = fixed_weights or {}
         rows = []
-        for i, c in enumerate(configs, 1):
-            print(f"[ablation {i}/{len(configs)}] Running config: {' + '.join(c)} (test={test})...", flush=True)
+        for i, config in enumerate(configurations, 1):
+            print(f"[ablation {i}/{len(configurations)}] Running config: {' + '.join(config)} (test={test})...", flush=True)
             t0 = time.perf_counter()
-            r = self.run_config(c, fixed_weights.get(tuple(c)), test=test, **kw)
-            print(f"[ablation {i}/{len(configs)}] Completed in {time.perf_counter()-t0:.1f}s", flush=True)
+            r = self.run_configuration(config, fixed_weights.get(tuple(config)), test=test, **kwargs)
+            print(f"[ablation {i}/{len(configurations)}] Completed in {time.perf_counter()-t0:.1f}s", flush=True)
             rows.append(r)
         return pd.DataFrame(rows)
 
+    # Aliases on Experiment for backwards compatibility
+    ablation = run_ablation_study
+    run_config = run_configuration
+    fit_calibrators = fit_score_calibrators
+    _prepare = _prepare_evaluation_splits
+    _calibrated = _apply_calibrations
 
-def default_ablation_configs(global_name="global", comp="complementary", local=LOCAL, baseline="baseline", with_local=True):
-    g, c, l = global_name, comp, local
-    cfgs = [(g,), (c,), (baseline,)]
+
+def get_default_ablation_configurations(
+    global_name: str = "global",
+    complementary_name: str = "complementary",
+    local_name: str = LOCAL,
+    baseline_name: str = "baseline",
+    with_local: bool = True
+) -> List[Tuple[str, ...]]:
+    """Generates standard feature branch combinations for ablation studies."""
+    g, c, l, b = global_name, complementary_name, local_name, baseline_name
+    configurations = [(g,), (c,), (b,)]
     if with_local:
-        cfgs += [(l,)]
-    cfgs += [(g, c)]
+        configurations.append((l,))
+    configurations.append((g, c))
     if with_local:
-        cfgs += [(g, l), (c, l), (g, c, l)]
-    return cfgs
+        configurations.extend([(g, l), (c, l), (g, c, l)])
+    return configurations
 
 
-def save_artifacts(ex, results, out_dir="results", name="ablation_val"):
-    """Everything the UI / a later test run needs: table, per-config (weights, tau), fitted calibrators."""
-    import json, os, pickle
-    os.makedirs(out_dir, exist_ok=True)
-    table = results.drop(columns=[c for c in results.columns if c.startswith("_")])
-    table.assign(weights=table.weights.astype(str)).to_csv(os.path.join(out_dir, f"{name}.csv"), index=False)
-    card = {r["config"]: {"weights": r["weights"], "tau": float(r["tau"]),
-                          "species_tau": {str(k): float(v) for k, v in (r.get("_species_tau") or {}).items()}}
-            for r in results.to_dict("records")}
-    json.dump(card, open(os.path.join(out_dir, "thresholds.json"), "w"), indent=2)
-    pickle.dump(ex.cal, open(os.path.join(out_dir, "calibrators.pkl"), "wb"))
+def save_experiment_artifacts(experiment: Experiment, results_dataframe: pd.DataFrame, output_directory: str = "results", name: str = "ablation_val"):
+    """Saves experiment evaluation tables, threshold lookup cards, and fitted calibrator pickles to disk."""
+    import json
+    import os
+    import pickle
+    
+    os.makedirs(output_directory, exist_ok=True)
+    table = results_dataframe.drop(columns=[col for col in results_dataframe.columns if col.startswith("_")])
+    table.assign(weights=table.weights.astype(str)).to_csv(os.path.join(output_directory, f"{name}.csv"), index=False)
+    
+    threshold_card = {
+        row["config"]: {
+            "weights": row["weights"],
+            "tau": float(row["tau"]),
+            "species_tau": {str(k): float(v) for k, v in (row.get("_species_tau") or {}).items()}
+        }
+        for row in results_dataframe.to_dict("records")
+    }
+    
+    json.dump(threshold_card, open(os.path.join(output_directory, "thresholds.json"), "w"), indent=2)
+    pickle.dump(experiment.calibrators, open(os.path.join(output_directory, "calibrators.pkl"), "wb"))
+
+
+# Backwards compatibility aliases
+config_name = get_configuration_name
+compress_features = compress_feature_branches
+default_ablation_configs = get_default_ablation_configurations
+save_artifacts = save_experiment_artifacts
+    

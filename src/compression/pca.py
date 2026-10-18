@@ -1,68 +1,135 @@
-"""
-PCA compression of embeddings (proposal: "PCA is applied ... using training data, several target
-dimensionalities are evaluated, unreduced representation is the reference").
-
-Design decisions (details in DECISIONS.md #6):
- * PCA is fitted on TRAIN features only -> no test information leaks in.
- * It is applied PER embedding branch (global, EVA02): the proposal fuses SCORES, so the "fused
-   representation" is not a single vector. We compress each branch, recompute cosine similarity
-   on the compressed vectors, THEN calibrate + fuse. ALIKED keypoints are not a vector and are
-   reported separately (storage only).
- * Optional whitening (+ L2 re-normalisation): known to help cosine retrieval on PCA-reduced
-   descriptors (Jegou & Chum, ECCV 2012). We keep it as an ablation switch.
- * `concat_weighted` is provided for the alternative reading of the proposal (PCA on a single
-   concatenated vector): cosine of [sqrt(w1)*e1, sqrt(w2)*e2] == w1*cos1 + w2*cos2.
-"""
 import numpy as np
 from sklearn.decomposition import PCA
 
+"""
+    Memory reduction and compression for embedding features using PCA and L2 normalization.
+    
+"""
 
-def l2n(x, eps=1e-12):
-    x = np.asarray(x, np.float32)
-    return x / np.maximum(np.linalg.norm(x, axis=1, keepdims=True), eps)
+def l2_normalize(features: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    """L2-normalizes feature vectors along the last axis."""
+    features = np.asarray(features, dtype=np.float32)
+    norms = np.maximum(np.linalg.norm(features, axis=1, keepdims=True), eps)
+    return features / norms
 
 
 class PCACompressor:
-    def __init__(self, n_components=256, whiten=True, seed=0):
-        self.k, self.whiten, self.seed = n_components, whiten, seed
+    """Applies PCA compression and optional L2 whitening/normalization to embedding features."""
+
+    def __init__(self, n_components: int = 256, whiten: bool = True, seed: int = 0):
+        self.n_components = n_components
+        self.whiten = whiten
+        self.seed = seed
         self.pca = None
 
-    def fit(self, train_feats):
-        x = l2n(train_feats)
-        k = min(self.k, x.shape[1], x.shape[0] - 1)
-        solver = "randomized" if k < 0.8 * min(x.shape) else "full"
-        self.pca = PCA(n_components=k, whiten=self.whiten, svd_solver=solver, random_state=self.seed)
-        self.pca.fit(x)
+    def fit(self, train_features: np.ndarray):
+        """Fits the PCA model exclusively on L2-normalized training features to prevent leakage."""
+        normalized_train = l2_normalize(train_features)
+        
+        # Ensure n_components does not exceed available dimensions or sample size - 1
+        max_components = min(normalized_train.shape[1], normalized_train.shape[0] - 1)
+        k = min(self.n_components, max_components)
+        
+        # Select efficient SVD solver based on matrix dimensions
+        svd_solver = "randomized" if k < 0.8 * min(normalized_train.shape) else "full"
+        
+        self.pca = PCA(
+            n_components=k,
+            whiten=self.whiten,
+            svd_solver=svd_solver,
+            random_state=self.seed
+        )
+        self.pca.fit(normalized_train)
         return self
 
-    def transform(self, feats):
-        return l2n(self.pca.transform(l2n(feats)))
+    def transform(self, features: np.ndarray) -> np.ndarray:
+        """Transforms features using the fitted PCA model and applies L2 re-normalization."""
+        if self.pca is None:
+            raise ValueError("PCACompressor must be fitted before calling transform().")
+        
+        normalized_features = l2_normalize(features)
+        projected = self.pca.transform(normalized_features)
+        return l2_normalize(projected)
 
-    def explained(self):
+    def explained_variance(self) -> float:
+        """Returns the cumulative explained variance ratio of the retained components."""
+        if self.pca is None:
+            return 0.0
         return float(self.pca.explained_variance_ratio_.sum())
 
-    def bytes_per_vector(self, dtype=np.float32):
+    explained = explained_variance
+
+    def bytes_per_vector(self, dtype=np.dtype(np.float32)) -> int:
+        """Calculates storage size in bytes per compressed vector."""
+        if self.pca is None:
+            return 0
         return int(self.pca.n_components_ * np.dtype(dtype).itemsize)
 
 
-def sweep(train_feats, gallery_feats, query_feats, dims, evaluate, whiten=True):
+def evaluate_dimensionality_sweep(
+    train_features: np.ndarray,
+    gallery_features: np.ndarray,
+    query_features: np.ndarray,
+    dimensions: list,
+    evaluate_fn,
+    whiten: bool = True
+) -> list:
     """
-    Evaluate retrieval at several dimensionalities.
-    `evaluate(gallery, queries)` -> dict of metrics (e.g. wraps nearest_neighbour + BAKS).
-    dim=None (or 'full') = reference without compression.
+    Evaluates retrieval performance across several target dimensionalities.
+    
+    Args:
+        train_features: Training features used to fit PCA.
+        gallery_features: Gallery dataset features.
+        query_features: Query dataset features.
+        dimensions: List of target dimensions to test (supports None or 'full' for unreduced).
+        evaluate_fn: Callable mapping `(gallery_embeddings, query_embeddings)` -> dict of metrics.
+        whiten: Whether to apply PCA whitening.
+        
+    Returns:
+        List of dictionaries containing evaluation results and metadata per dimension.
     """
-    rows = []
-    for d in dims:
-        if d in (None, "full"):
-            g, q, dim, ev = l2n(gallery_feats), l2n(query_feats), gallery_feats.shape[1], 1.0
+    results = []
+    for dim in dimensions:
+        if dim in (None, "full"):
+            gallery_processed = l2_normalize(gallery_features)
+            query_processed = l2_normalize(query_features)
+            dim_value = gallery_features.shape[1]
+            explained_var = 1.0
         else:
-            c = PCACompressor(d, whiten).fit(train_feats)
-            g, q, dim, ev = c.transform(gallery_feats), c.transform(query_feats), d, c.explained()
-        rows.append({"dim": dim, "explained_var": ev, "bytes_per_img": dim * 4, **evaluate(g, q)})
-    return rows
+            compressor = PCACompressor(n_components=dim, whiten=whiten).fit(train_features)
+            gallery_processed = compressor.transform(gallery_features)
+            query_processed = compressor.transform(query_features)
+            dim_value = dim
+            explained_var = compressor.explained_variance()
+            
+        metrics = evaluate_fn(gallery_processed, query_processed)
+        results.append({
+            "dim": dim_value,
+            "explained_var": explained_var,
+            "bytes_per_img": dim_value * np.dtype(np.float32).itemsize,
+            **metrics
+        })
+    return results
 
 
-def concat_weighted(embeddings, weights):
-    """[sqrt(w_i) * l2n(e_i)] -> one vector whose cosine equals the weighted sum of branch cosines."""
-    w = np.asarray(weights, np.float64); w = w / w.sum()
-    return np.concatenate([np.sqrt(wi) * l2n(e) for wi, e in zip(w, embeddings)], axis=1)
+def concat_weighted_embeddings(embeddings: list, weights: list) -> np.ndarray:
+    """
+    Concatenates multiple embedding branches with weights such that the cosine similarity 
+    of the concatenated vector equals the weighted sum of individual branch cosine similarities.
+    
+    Formula: [sqrt(w_i) * l2n(e_i)] -> cosine equals sum(w_i * cos_i).
+    """
+    weights_arr = np.asarray(weights, dtype=np.float64)
+    weights_arr = weights_arr / weights_arr.sum()
+    
+    weighted_branches = [
+        np.sqrt(weight) * l2_normalize(emb) 
+        for weight, emb in zip(weights_arr, embeddings)
+    ]
+    return np.concatenate(weighted_branches, axis=1)
+
+
+# Backwards compatibility aliases
+l2n = l2_normalize
+sweep = evaluate_dimensionality_sweep
+concat_weighted = concat_weighted_embeddings

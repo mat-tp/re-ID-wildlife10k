@@ -1,24 +1,12 @@
-"""
-Train / eval transforms shared by ALL embedding models (global, EVA02, DINOv2).
-Only the input size and normalisation statistics differ per model, so they are parameters.
-
-Choices (why in DECISIONS.md #4):
- * Eval: plain resize to a square + normalise. MegaDescriptor's published usage does exactly this,
-   and the benchmark baseline was evaluated this way -> comparable numbers.  [PAPER]
- * Train: mild RandomResizedCrop / rotation / photometric jitter / blur / random erasing.
-   Random erasing + jitter are standard, cheap wins in re-ID (Luo et al., "Bag of Tricks", 2019). [PRACTICE]
- * NO horizontal flip by default. In animal Re-ID the left and right flank of a zebra, giraffe,
-   leopard, tiger, seal... carry DIFFERENT patterns; a mirrored image looks like another animal.
-   Flips are only enabled for species listed in config.augmentation['hflip_species'].
- * Hue jitter is tiny: coat / skin colour is itself an identity cue.
-"""
+from typing import Union
 import numpy as np
 import torch
 import torchvision.transforms as T
 from PIL import Image
 
 
-def to_pil(image):
+def convert_to_pil_image(image: Union[Image.Image, np.ndarray]) -> Image.Image:
+    """Converts input image data (PIL Image or NumPy array) into an RGB PIL Image."""
     if isinstance(image, Image.Image):
         return image.convert("RGB")
     if isinstance(image, np.ndarray):
@@ -26,32 +14,64 @@ def to_pil(image):
     raise TypeError(f"Unsupported image type: {type(image)}")
 
 
-def eval_transform(size, mean, std):
-    return T.Compose([T.Lambda(to_pil), T.Resize((size, size), interpolation=T.InterpolationMode.BICUBIC),
-                      T.ToTensor(), T.Normalize(mean, std)])
+def create_evaluation_transform(image_size: int, mean: list, std: list) -> T.Compose:
+    """Creates the deterministic evaluation transformation pipeline for feature extraction."""
+    return T.Compose([
+        T.Lambda(convert_to_pil_image),
+        T.Resize((image_size, image_size), interpolation=T.InterpolationMode.BICUBIC),
+        T.ToTensor(),
+        T.Normalize(mean, std)
+    ])
 
 
 class SpeciesAwareFlip:
-    """Flip only when the sample's species is in the allow-list (needs the species at call time)."""
-    def __init__(self, species, p=0.5):
-        self.species, self.p = set(species), p
+    """Applies horizontal flipping conditionally based on whether the sample's species is permitted."""
+    def __init__(self, allowed_species: list, probability: float = 0.5):
+        self.allowed_species = set(allowed_species)
+        self.probability = probability
 
-    def __call__(self, img, species):
-        if species in self.species and torch.rand(1).item() < self.p:
-            return img.transpose(Image.FLIP_LEFT_RIGHT)
+    def __call__(self, img: Image.Image, species: str) -> Image.Image:
+        if species in self.allowed_species and torch.rand(1).item() < self.probability:
+            return img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
         return img
 
 
-def train_transform(size, mean, std, cfg):
-    """`cfg` = config.augmentation. Returns a callable(image) for PIL/ndarray input."""
-    ops = [T.Lambda(to_pil),
-           T.RandomResizedCrop((size, size), scale=tuple(cfg["random_resized_crop_scale"]),
-                               ratio=(0.85, 1.18), interpolation=T.InterpolationMode.BICUBIC),
-           T.RandomApply([T.RandomRotation(cfg["rotation_deg"], interpolation=T.InterpolationMode.BILINEAR)], p=0.5),
-           T.ColorJitter(**cfg["color_jitter"])]
-    if cfg.get("gaussian_blur_p", 0) > 0:
-        ops.append(T.RandomApply([T.GaussianBlur(5, sigma=(0.1, 1.5))], p=cfg["gaussian_blur_p"]))
-    ops += [T.ToTensor(), T.Normalize(mean, std)]
-    if cfg.get("random_erasing_p", 0) > 0:
-        ops.append(T.RandomErasing(p=cfg["random_erasing_p"], scale=(0.02, 0.15), value="random"))
-    return T.Compose(ops)
+def create_training_transform(image_size: int, mean: list, std: list, config: dict) -> T.Compose:
+    """
+    Creates the stochastic training transformation pipeline incorporating 
+    cropping, rotation, photometric jitter, blurring, and random erasing.
+    """
+    operations = [
+        T.Lambda(convert_to_pil_image),
+        T.RandomResizedCrop(
+            (image_size, image_size),
+            scale=tuple(config["random_resized_crop_scale"]),
+            ratio=(0.85, 1.18),
+            interpolation=T.InterpolationMode.BICUBIC
+        ),
+        T.RandomApply(
+            [T.RandomRotation(config["rotation_deg"], interpolation=T.InterpolationMode.BILINEAR)],
+            p=0.5
+        ),
+        T.ColorJitter(**config["color_jitter"])
+    ]
+    
+    if config.get("gaussian_blur_p", 0) > 0:
+        operations.append(
+            T.RandomApply([T.GaussianBlur(kernel_size=5, sigma=(0.1, 1.5))], p=config["gaussian_blur_p"])
+        )
+        
+    operations.extend([T.ToTensor(), T.Normalize(mean, std)])
+    
+    if config.get("random_erasing_p", 0) > 0:
+        operations.append(
+            T.RandomErasing(p=config["random_erasing_p"], scale=(0.02, 0.15), value="random")
+        )
+        
+    return T.Compose(operations)
+
+
+# Backwards compatibility aliases
+to_pil = convert_to_pil_image
+eval_transform = create_evaluation_transform
+train_transform = create_training_transform
