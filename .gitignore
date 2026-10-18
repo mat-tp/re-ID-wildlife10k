@@ -16,8 +16,10 @@ __pycache__/
 features/
 checkpoints/
 
-!docs/main.pdf
+# Docs folder configuration
 docs/*
+!docs/MLM_proposal.pdf
+
 references.bib
 
 # LaTeX auxiliary/generated files
@@ -31,4 +33,3 @@ references.bib
 *.zip
 .~lock.*#
 ~$*
-
