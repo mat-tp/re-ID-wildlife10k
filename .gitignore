@@ -8,6 +8,8 @@
 data/*
 data/
 
+docs/manuscript/
+
 # Environments & caches
 .venv/
 __pycache__/
@@ -15,7 +17,8 @@ features/
 checkpoints/
 
 !docs/main.pdf
-docs/
+docs/*
+references.bib
 
 # LaTeX auxiliary/generated files
 *.aux
@@ -26,3 +29,4 @@ docs/
 *.log
 
 *.zip
+.~lock.PresentationSlides.pptx#
