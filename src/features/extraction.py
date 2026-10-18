@@ -14,7 +14,7 @@ import os
 import numpy as np
 
 
-def extract_all(model, df, root, cache_dir, *, shard_size=10_000, batch_size=64, num_workers=8,
+def extract_all(model, df, root, cache_dir, *, shard_size=10_000, batch_size=32, num_workers=4,
                 amp=True, device=None, overwrite=False):
     from src.data_processing.dataloader import make_eval_loader      # lazy: keeps this module torch-free to import
     from src.models.global_models import extract_features

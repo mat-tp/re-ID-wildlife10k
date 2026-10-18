@@ -16,10 +16,29 @@ def l2n(x, eps=1e-12):
     return x / np.maximum(np.linalg.norm(x, axis=1, keepdims=True), eps)
 
 
-def topk_cosine(q, g, k, chunk=512):
+def topk_cosine(q, g, k, chunk=1024):
     """Exact top-k gallery neighbours per query. Returns (idx[Nq,k], score[Nq,k]) sorted by score desc."""
-    q, g = l2n(q), l2n(g)
     k = min(k, len(g))
+    try:
+        import torch
+        if torch.cuda.is_available():
+            q_norm = l2n(q)
+            g_norm = l2n(g)
+            with torch.no_grad():
+                gt = torch.from_numpy(g_norm).cuda().t().contiguous()
+                idx = np.empty((len(q), k), np.int64)
+                sc = np.empty((len(q), k), np.float32)
+                for a in range(0, len(q), chunk):
+                    qc = torch.from_numpy(q_norm[a:a + chunk]).cuda()
+                    s = torch.matmul(qc, gt)
+                    val, top_i = torch.topk(s, k, dim=1)
+                    idx[a:a + chunk] = top_i.cpu().numpy()
+                    sc[a:a + chunk] = val.cpu().numpy()
+                return idx, sc
+    except Exception:
+        pass
+
+    q, g = l2n(q), l2n(g)
     gt = np.ascontiguousarray(g.T)
     idx = np.empty((len(q), k), np.int64); sc = np.empty((len(q), k), np.float32)
     for a in range(0, len(q), chunk):

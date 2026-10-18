@@ -19,7 +19,13 @@ DIRS = {"global": "megadescriptor", "miewid": "miewid", "complementary": "eva02"
 def build_model(which):
     if which == "global":
         from src.models.global_models import GlobalModel
-        g = C.models["global"]; return GlobalModel(g["variant"], g["init"])
+        g = C.models["global"]
+        m = GlobalModel(g["variant"], g["init"])
+        ckpt = "checkpoints/megadescriptor_megadescriptor_latest.pt"
+        if os.path.isfile(ckpt):
+            print(f"[build_model] Loading fine-tuned weights from {ckpt}...")
+            m.load(ckpt)
+        return m
     if which == "miewid":
         from src.models.global_models import MiewIDModel
         return MiewIDModel(C.models["miewid"]["hf_id"])

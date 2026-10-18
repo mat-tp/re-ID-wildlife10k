@@ -111,7 +111,7 @@ with tab_res:
     st.subheader("Ablation results")
     f = os.path.join(results_dir, "ablation_val.csv")
     if os.path.isfile(f):
-        t = pd.read_csv(f); st.dataframe(t, use_container_width=True)
+        t = pd.read_csv(f); st.dataframe(t, width="stretch")
         cols = [c for c in t.columns if c.endswith(("BAKS", "BAUS", "NBA"))]
         st.bar_chart(t.set_index("config")[cols])
     else:

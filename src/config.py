@@ -76,7 +76,7 @@ training = {
     "weight_decay": 1e-4,                    # [JUDGEMENT] (skeleton used 0)
     "schedule": "cosine", "warmup_epochs": 1,   # cosine [PAPER]; warm-up [PRACTICE]
     "effective_batch": 128,                  # [PAPER]
-    "micro_batch": 16, "accum_steps": 8,     # 16*8=128 fits Swin-L-384 in fp16
+    "micro_batch": 8, "accum_steps": 16,     # 8*16=128 fits Swin-L-384 without Windows TDR (0x116) timeout
     "epochs": 12,                            # paper used 100 (~1 week/GPU); budget-limited [JUDGEMENT]
     "arcface_margin": 0.5, "arcface_scale": 64.0,   # [PAPER grid {0.25,.5,.75}x{32,64,128}]
     "grad_clip": 5.0,

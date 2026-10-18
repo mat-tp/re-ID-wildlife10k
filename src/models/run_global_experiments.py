@@ -18,15 +18,18 @@ from src.models.global_models import GlobalModel, MiewIDModel, extract_features,
 from src.retrieval.metrics import nearest_neighbour, closed_set_baks, best_threshold
 
 
-def validation_score(model, df, root, gallery_cap=None, query_cap=None, batch=64):
+def validation_score(model, df, root, gallery_cap=None, query_cap=None, batch=32):
     """Returns dict(closed BAKS, open NBA, tau ...) on the validation queries."""
     gal = df[df.role == TRAIN]
     qry = df[df.role.isin([VAL_KNOWN, VAL_UNKNOWN])]
     if gallery_cap: gal = cap_per_group(gal, "identity", gallery_cap)
     if query_cap:   qry = cap_per_group(qry, ["dataset", "role"], query_cap)
     tf = model.eval_transform()
-    g, _ = extract_features(model, make_eval_loader(gal, tf, root, batch), amp=C.training["amp"])
-    q, _ = extract_features(model, make_eval_loader(qry, tf, root, batch), amp=C.training["amp"])
+    print(f"\n[Validation] Extracting gallery features ({len(gal)} images)...")
+    g, _ = extract_features(model, make_eval_loader(gal, tf, root, batch), amp=C.training["amp"], desc="Gallery features")
+    print(f"\n[Validation] Extracting query features ({len(qry)} images)...")
+    q, _ = extract_features(model, make_eval_loader(qry, tf, root, batch), amp=C.training["amp"], desc="Query features")
+    print("\n[Validation] Computing 1-NN cosine similarity & open-set thresholds...")
     s, pred = nearest_neighbour(q.numpy(), g.numpy(), gal.identity.to_numpy())
     known = (qry.role == VAL_KNOWN).to_numpy()
     true = np.where(known, qry.identity.to_numpy(), NEW)
@@ -41,7 +44,21 @@ def main(mode, which):
     model = MiewIDModel(C.models["miewid"]["hf_id"]) if which == "miewid" else \
         GlobalModel(g["variant"], g["init"], g["grad_checkpointing"])
     if mode == "zero_shot":
-        print(validation_score(model, df, root)); return
+        score = validation_score(model, df, root)
+        print("\nFinal Validation Score:", score)
+        import os, json
+        os.makedirs("results", exist_ok=True)
+        res_file = "results/global_model_comparison.json"
+        existing = {}
+        if os.path.exists(res_file):
+            try:
+                with open(res_file, "r") as f: existing = json.load(f)
+            except Exception: pass
+        existing[f"{which}_zero_shot"] = score
+        with open(res_file, "w") as f:
+            json.dump(existing, f, indent=2)
+        print(f"Results automatically logged to {res_file}")
+        return
 
     train_df = df[df.role == TRAIN]                     # val_known / val_unknown are NOT trained on
     label_map = build_label_map(train_df)
@@ -54,7 +71,20 @@ def main(mode, which):
               accum_steps=T["accum_steps"], grad_clip=T["grad_clip"], amp=T["amp"],
               eval_fn=eval_fn, eval_every=2, ckpt_path=f"checkpoints/{which}_{g['init']}_best.pt")
     model.load(f"checkpoints/{which}_{g['init']}_best.pt")
-    print("FULL validation:", validation_score(model, df, root))
+    full_score = validation_score(model, df, root)
+    print("\nFULL validation:", full_score)
+    import os, json
+    os.makedirs("results", exist_ok=True)
+    res_file = "results/global_model_comparison.json"
+    existing = {}
+    if os.path.exists(res_file):
+        try:
+            with open(res_file, "r") as f: existing = json.load(f)
+        except Exception: pass
+    existing[f"{which}_fine_tuned"] = full_score
+    with open(res_file, "w") as f:
+        json.dump(existing, f, indent=2)
+    print(f"Results automatically logged to {res_file}")
 
 
 if __name__ == "__main__":

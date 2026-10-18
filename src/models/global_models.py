@@ -71,33 +71,55 @@ class GlobalModel(_EmbeddingModel):
         return self.backbone(x)
 
     def save(self, path):
+        import os
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         torch.save({"variant": self.variant, "init": self.init, "backbone": self.backbone.state_dict()}, path)
 
     def load(self, path):
-        self.backbone.load_state_dict(torch.load(path, map_location="cpu")["backbone"], strict=True)
+        sd = torch.load(path, map_location="cpu")
+        key = "model_state" if "model_state" in sd else "backbone"
+        self.backbone.load_state_dict(sd[key], strict=True)
+
+
+class _GeM(nn.Module):
+    def __init__(self, p=3.0, eps=1e-6):
+        super().__init__()
+        self.p = nn.Parameter(torch.ones(1) * p)
+        self.eps = eps
+
+    def forward(self, x):
+        return F.avg_pool2d(x.clamp(min=self.eps).pow(self.p), (x.size(-2), x.size(-1))).pow(1.0 / self.p)
 
 
 class MiewIDModel(_EmbeddingModel):
     """
-    MiewID (EfficientNetV2 + angular-margin loss), loaded from the Hugging Face hub.
-    NOTE: I could not reach the hub from my sandbox. Input size / normalisation below follow my
-    recollection of the 'miewid-msv3' card - CHECK the model card before trusting them.
-    The embedding size is measured with a dummy forward pass instead of hard-coded.
+    MiewID (EfficientNetV2 + GeM pooling + BatchNorm1d), loaded directly from the official
+    safetensors weights on Hugging Face (conservationxlabs/miewid-msv3) without brittle transformers wrappers.
+    Embedding dimension: 2152. Input size: 440x440.
     """
     HF_ID = "conservationxlabs/miewid-msv3"
 
     def __init__(self, hf_id=None, input_size=440):
         super().__init__()
-        from transformers import AutoModel
-        self.backbone = AutoModel.from_pretrained(hf_id or self.HF_ID, trust_remote_code=True)
+        from huggingface_hub import hf_hub_download
+        import safetensors.torch
         self.input_size = input_size
         self.mean, self.std = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
-        with torch.no_grad():
-            self.backbone.eval()
-            self.embedding_dim = self.backbone(torch.zeros(1, 3, input_size, input_size)).shape[-1]
+        self.embedding_dim = 2152
+
+        self.backbone = timm.create_model("efficientnetv2_rw_m", pretrained=False, num_classes=0)
+        self.backbone.global_pool = _GeM()
+        self.bn = nn.BatchNorm1d(self.embedding_dim)
+
+        weights_path = hf_hub_download(hf_id or self.HF_ID, "model.safetensors")
+        sd = safetensors.torch.load_file(weights_path)
+        backbone_sd = {k.replace("backbone.", ""): v for k, v in sd.items() if k.startswith("backbone.")}
+        bn_sd = {k.replace("bn.", ""): v for k, v in sd.items() if k.startswith("bn.")}
+        self.backbone.load_state_dict(backbone_sd, strict=True)
+        self.bn.load_state_dict(bn_sd, strict=True)
 
     def forward(self, x):
-        return self.backbone(x)
+        return self.bn(self.backbone(x).view(x.shape[0], -1))
 
 
 class ArcFaceHead(nn.Module):
@@ -126,12 +148,13 @@ def _device(device):
 
 
 @torch.no_grad()
-def extract_features(model, loader, device=None, amp=True):
+def extract_features(model, loader, device=None, amp=True, desc="Extracting features"):
     """Returns (features [N,d] float32 CPU, extras) where extras = [labels, row_idx] in loader order."""
+    from tqdm import tqdm
     dev = _device(device)
     model.eval().to(dev)
     feats, extras = [], None
-    for images, *rest in loader:
+    for images, *rest in tqdm(loader, desc=desc, dynamic_ncols=True):
         with torch.autocast(device_type=dev.type, dtype=torch.float16, enabled=amp and dev.type == "cuda"):
             emb = model.embed(images.to(dev, non_blocking=True))
         feats.append(emb.float().cpu())
@@ -145,12 +168,14 @@ def extract_features(model, loader, device=None, amp=True):
 def fine_tune(model, train_loader, *, num_classes, epochs=12, lr=1e-3, head_lr_mult=10.0,
               weight_decay=1e-4, warmup_epochs=1, arcface_margin=0.5, arcface_scale=64.0,
               accum_steps=8, grad_clip=5.0, amp=True, device=None, log_every=50,
-              eval_fn=None, eval_every=2, ckpt_path=None):
+              eval_fn=None, eval_every=2, ckpt_path=None, resume=True):
     """
     ArcFace fine-tuning. `train_loader` yields (images, label_idx, row_idx) with label_idx in [0, num_classes).
     `eval_fn(model) -> float` (higher is better, e.g. validation open-set NBA) is called every
     `eval_every` epochs; the best backbone is saved to `ckpt_path`.
+    Saves a resume checkpoint to `_latest.pt` after each epoch.
     """
+    import os
     dev = _device(device)
     model.to(dev)
     head = ArcFaceHead(model.embedding_dim, num_classes, arcface_scale, arcface_margin).to(dev)
@@ -164,8 +189,25 @@ def fine_tune(model, train_loader, *, num_classes, epochs=12, lr=1e-3, head_lr_m
     use_amp = amp and dev.type == "cuda"
     scaler = torch.amp.GradScaler(dev.type, enabled=use_amp)
     best = -1.0
+    start_epoch = 0
 
-    for epoch in range(epochs):
+    latest_path = None
+    if ckpt_path:
+        os.makedirs(os.path.dirname(os.path.abspath(ckpt_path)), exist_ok=True)
+        latest_path = ckpt_path.replace("_best.pt", "_latest.pt")
+        if resume and os.path.isfile(latest_path):
+            print(f"[Resume] Found checkpoint at {latest_path}, restoring training state...")
+            ckpt = torch.load(latest_path, map_location=dev)
+            model.backbone.load_state_dict(ckpt["model_state"])
+            head.load_state_dict(ckpt["head_state"])
+            opt.load_state_dict(ckpt["opt_state"])
+            sched.load_state_dict(ckpt["sched_state"])
+            scaler.load_state_dict(ckpt["scaler_state"])
+            best = ckpt.get("best_score", -1.0)
+            start_epoch = ckpt["epoch"] + 1
+            print(f"[Resume] Resuming from epoch {start_epoch+1}/{epochs} (previous best score: {best:.4f})")
+
+    for epoch in range(start_epoch, epochs):
         model.train(); head.train()
         opt.zero_grad(set_to_none=True)
         run, n = 0.0, 0
@@ -182,8 +224,21 @@ def fine_tune(model, train_loader, *, num_classes, epochs=12, lr=1e-3, head_lr_m
                 opt.zero_grad(set_to_none=True)
             run += loss.item(); n += 1
             if log_every and (step + 1) % log_every == 0:
-                print(f"epoch {epoch+1}/{epochs} step {step+1}: loss {run/n:.4f}")
+                print(f"epoch {epoch+1}/{epochs} step {step+1}/{len(train_loader)}: loss {run/n:.4f} (lr {sched.get_last_lr()[0]:.2e})")
         print(f"epoch {epoch+1}/{epochs} done - mean loss {run/max(n,1):.4f}, lr {sched.get_last_lr()[0]:.2e}")
+        
+        # Save latest checkpoint after every epoch
+        if latest_path:
+            torch.save({
+                "epoch": epoch,
+                "model_state": model.backbone.state_dict(),
+                "head_state": head.state_dict(),
+                "opt_state": opt.state_dict(),
+                "sched_state": sched.state_dict(),
+                "scaler_state": scaler.state_dict(),
+                "best_score": best,
+            }, latest_path)
+
         if eval_fn is not None and ((epoch + 1) % eval_every == 0 or epoch + 1 == epochs):
             score = eval_fn(model)
             print(f"  validation score: {score:.4f} (best {max(best, score):.4f})")

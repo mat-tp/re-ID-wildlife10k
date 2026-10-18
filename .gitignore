@@ -1,11 +1,19 @@
 # Text files
 *.txt
+!requirements.txt
 
 # PDF files
 *.pdf
 
 data/*
 data/
+
+# Environments & caches
+.venv/
+__pycache__/
+features/
+checkpoints/
+results/
 
 !docs/main.pdf
 
@@ -17,6 +25,4 @@ data/
 *.fls
 *.log
 
-*.zip
-
-__pycache__/
+*.zip

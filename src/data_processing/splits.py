@@ -80,8 +80,7 @@ def assign_roles(df, unknown_id_fraction=0.10, known_img_fraction=0.10,
 def cap_per_group(df, by, n, seed=0):
     """Keep at most `n` rows per value of column(s) `by` (cheap monitoring subsets, e.g. during
     fine-tuning where extracting every validation image each epoch would be too slow)."""
-    return (df.groupby(by, group_keys=False)
-              .apply(lambda g: g.sample(min(len(g), n), random_state=seed)))
+    return df.sample(frac=1.0, random_state=seed).groupby(by, as_index=False).head(n)
 
 
 def summarize(df):

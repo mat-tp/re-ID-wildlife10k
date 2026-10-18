@@ -41,8 +41,9 @@ class WildlifeReID10kDataset(Dataset):
         return len(self.data)
 
     def load_image(self, rel_path):
-        full = os.path.join(self.root, rel_path)
-        img = cv2.imread(full, cv2.IMREAD_COLOR)           # uint8 BGR (alpha, if any, is dropped)
+        full = os.path.abspath(os.path.join(self.root, rel_path))
+        full_read = "\\\\?\\" + full if (os.name == "nt" and not full.startswith("\\\\?\\")) else full
+        img = cv2.imread(full_read, cv2.IMREAD_COLOR)           # uint8 BGR (alpha, if any, is dropped)
         if img is None:
             raise FileNotFoundError(f"Image not found / unreadable: {full}")
         return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -59,7 +60,7 @@ def build_label_map(train_df):
 
 
 def make_train_loader(train_df, transform, label_map, root="data", batch_size=16,
-                      id_alpha=0.5, dataset_beta=0.25, num_workers=8, seed=0):
+                      id_alpha=0.5, dataset_beta=0.25, num_workers=4, seed=0):
     ds = WildlifeReID10kDataset(train_df, root, transform, label_map)
     w = sampling_weights(train_df["identity"], train_df["dataset"], id_alpha, dataset_beta)
     g = torch.Generator().manual_seed(seed)
@@ -69,7 +70,7 @@ def make_train_loader(train_df, transform, label_map, root="data", batch_size=16
                       pin_memory=True, drop_last=True, persistent_workers=num_workers > 0)
 
 
-def make_eval_loader(df, transform, root="data", batch_size=64, num_workers=8):
+def make_eval_loader(df, transform, root="data", batch_size=64, num_workers=4):
     ds = WildlifeReID10kDataset(df, root, transform)      # labels not needed: identities live in df
     return DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers,
                       pin_memory=True, persistent_workers=num_workers > 0)

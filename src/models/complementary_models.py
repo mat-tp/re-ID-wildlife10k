@@ -47,12 +47,23 @@ class ComplementaryModel(nn.Module):
         self.timm_id = timm_id
 
         # Load EVA02 without classification head, using average pooling for fixed-length output
-        self.backbone = timm.create_model(
-            timm_id,
-            pretrained=True,
-            num_classes=0,
-            global_pool="avg",
-        )
+        try:
+            self.backbone = timm.create_model(
+                timm_id,
+                pretrained=True,
+                num_classes=0,
+                global_pool="avg",
+            )
+        except Exception:
+            # Fallback to local cache if network is unavailable
+            import os
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            self.backbone = timm.create_model(
+                timm_id,
+                pretrained=True,
+                num_classes=0,
+                global_pool="avg",
+            )
 
         # Resolve preprocessing config from the model so mean, std and input size always match
         self.data_config = resolve_model_data_config(self.backbone)

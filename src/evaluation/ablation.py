@@ -126,7 +126,13 @@ class Experiment:
 
     def ablation(self, configs, fixed_weights=None, test=False, **kw):
         fixed_weights = fixed_weights or {}
-        rows = [self.run_config(c, fixed_weights.get(tuple(c)), test=test, **kw) for c in configs]
+        rows = []
+        for i, c in enumerate(configs, 1):
+            print(f"[ablation {i}/{len(configs)}] Running config: {' + '.join(c)} (test={test})...", flush=True)
+            t0 = time.perf_counter()
+            r = self.run_config(c, fixed_weights.get(tuple(c)), test=test, **kw)
+            print(f"[ablation {i}/{len(configs)}] Completed in {time.perf_counter()-t0:.1f}s", flush=True)
+            rows.append(r)
         return pd.DataFrame(rows)
 
 

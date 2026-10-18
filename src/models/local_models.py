@@ -97,10 +97,17 @@ class LocalModel:
    # Geometric verification: returns the number of RANSAC inliers (needs >= 8 matches)
    @staticmethod
    def geometric_inliers(kpts0, kpts1, thresh=3.0) -> int:
-      if len(kpts0) < 8:
+      if kpts0 is None or kpts1 is None or len(kpts0) < 8 or len(kpts1) < 8:
          return 0
-      _, mask = cv2.findFundamentalMat(kpts0, kpts1, cv2.USAC_MAGSAC, thresh, 0.999, 10000)
-      return int(mask.sum()) if mask is not None else 0
+      try:
+         _, mask = cv2.findFundamentalMat(kpts0, kpts1, cv2.USAC_MAGSAC, thresh, 0.999, 10000)
+         return int(mask.sum()) if mask is not None else 0
+      except Exception:
+         try:
+            _, mask = cv2.findFundamentalMat(kpts0, kpts1, cv2.FM_RANSAC, thresh, 0.999, 10000)
+            return int(mask.sum()) if mask is not None else 0
+         except Exception:
+            return 0
 
    # Scalar score for a pair of already-extracted feature sets
    def score(self, feats0, feats1, use_ransac=True) -> float:
