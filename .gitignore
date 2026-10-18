@@ -15,6 +15,7 @@ features/
 checkpoints/
 
 !docs/main.pdf
+docs/
 
 # LaTeX auxiliary/generated files
 *.aux
@@ -24,4 +25,4 @@ checkpoints/
 *.fls
 *.log
 
-*.zip
+*.zip
