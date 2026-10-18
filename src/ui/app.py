@@ -55,9 +55,6 @@ with st.sidebar:
     except Exception as e:                                      # e.g. no cache yet
         st.error(f"Could not load: {e}"); st.stop()
     cfg = st.selectbox("Method (branches fused)", svc.configs(), format_func=lambda c: " + ".join(c))
-    cfg = tuple(b for b in cfg if b in svc.feats)               # local not wired into the UI yet
-    if not cfg:
-        st.warning("Selected method needs the local branch, which the UI does not support yet."); st.stop()
     w, tau_saved = svc.settings(cfg)
     k = st.slider("Identities to show", 1, 10, 5)
     use_saved = st.checkbox("Use threshold tau tuned on validation", value=tau_saved is not None, disabled=tau_saved is None)
@@ -71,28 +68,34 @@ with tab_id:
     st.subheader("Which individual is this?")
     src = st.radio("Query image", ["Pick from the benchmark test set", "Upload an image"], horizontal=True)
     qvec, qinfo, exclude = None, None, None
+    query_img_obj, query_row_idx = None, None
     if src.startswith("Pick"):
         test = svc.df[svc.df.split == "test"]
         c1, c2 = st.columns(2)
         ds = c1.selectbox("Dataset", sorted(test.dataset.unique()))
         pool = test[test.dataset == ds]
         row = c2.selectbox("Image", pool.index[:500], format_func=lambda r: f"{svc.df.path[r].split('/')[-1]}  (row {r})")
-        qvec = {b: svc.feats[b][[row]] for b in cfg}
+        qvec = {b: svc.feats[b][[row]] for b in cfg if b in svc.feats}
         qinfo = svc.df.loc[row]
-        left, right = st.columns([1, 3]); 
+        query_row_idx = row
+        left, right = st.columns([1, 3])
         with left:
             thumb(svc.root, qinfo.path, 220)
     else:
         up = st.file_uploader("Image of an animal", type=["jpg", "jpeg", "png"])
         if up:
-            img = Image.open(up); st.image(img, width=220)
+            img = Image.open(up)
+            st.image(img, width=220)
+            query_img_obj = img
             try:
-                qvec = {b: svc.embed_upload(img, b) for b in cfg}
+                qvec = {b: svc.embed_upload(img, b) for b in cfg if b in svc.feats}
             except Exception as e:
                 st.error(f"Cannot embed uploaded image: {e}")
+    if "local" in cfg:
+        st.info("✨ ALIKED + LightGlue local spatial matching active: candidates will be verified via keypoint correspondences.")
     if qvec is not None and st.button("Search", type="primary"):
         with st.spinner("This may take a moment."):
-            out = svc.search(qvec, cfg, k=k, tau=tau)
+            out = svc.search(qvec, cfg, k=k, tau=tau, query_img=query_img_obj, query_row=query_row_idx)
         if out["verdict"] == NEW:
             st.warning(f"**New individual** (best score {out['best_score']:.3f} < tau {out['tau']:.3f})")
         else:

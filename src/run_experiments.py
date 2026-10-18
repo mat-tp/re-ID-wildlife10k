@@ -44,12 +44,14 @@ def get_experiment(args, df):
     from src.features.extraction import load_features
     feats = load_features(R["feature_cache"], {b: d for b, d in DIRS.items() if os.path.isdir(os.path.join(R["feature_cache"], d))})
     local = None
+    k_local = args.k_local if hasattr(args, "k_local") and args.k_local else R["K_local"]
+    max_q = getattr(args, "max_queries", None)
     if not args.no_local:
         from src.retrieval.similarity import LocalScorer
-        from src.data_processing.dataloader import WildlifeReID10kDataset
-        ds = WildlifeReID10kDataset(df, C.data["dataset_root"])
-        local = LocalScorer(lambda r: ds.load_image(ds.paths[r]))
-    return Experiment(df, feats, local, R["K"], R["K_local"], weight_step=R["weight_step"])
+        from src.data_processing.dataloader import convert_to_rgb_image
+        cache_path = os.path.join(args.out, "local_pairs_cache.pkl")
+        local = LocalScorer(lambda r: convert_to_rgb_image(df.path.iloc[r], C.data["dataset_root"]), use_ransac=getattr(args, "ransac", False), cache_file=cache_path)
+    return Experiment(df, feats, local, R["K"], k_local, weight_step=R["weight_step"], max_queries=max_q)
 
 
 def main():
@@ -57,6 +59,10 @@ def main():
     ap.add_argument("cmd", choices=["extract", "ablation", "compression"]); ap.add_argument("what", nargs="?")
     ap.add_argument("--test", action="store_true"); ap.add_argument("--demo", action="store_true"); ap.add_argument("--no-local", action="store_true")
     ap.add_argument("--out", default=C.retrieval["results_dir"])
+    ap.add_argument("--max-queries", type=int, default=None, help="Limit validation/test queries for fast representative evaluation")
+    ap.add_argument("--k-local", type=int, default=10, help="Candidate shortlist size for local verification")
+    ap.add_argument("--ransac", action="store_true", help="Enable OpenCV MAGSAC/RANSAC geometric verification (slower)")
+    ap.add_argument("--configs", type=str, default=None, help="Comma-separated configs to run, e.g. 'global,global+complementary,global+complementary+local'")
     a = ap.parse_args(); df = get_frames(C.data)
     if a.cmd == "extract":
         from src.features.extraction import extract_all
@@ -65,7 +71,10 @@ def main():
     ex = get_experiment(a, df)
     if a.cmd == "ablation":
         names = [b for b in ex.feats]
-        cfgs = default_ablation_configs(with_local=not a.no_local) if {"global", "complementary", "baseline"} <= set(names) else [(b,) for b in names]
+        if a.configs:
+            cfgs = [tuple(c.strip().split("+")) for c in a.configs.split(",")]
+        else:
+            cfgs = default_ablation_configs(with_local=not a.no_local) if {"global", "complementary", "baseline"} <= set(names) else [(b,) for b in names]
         res = ex.ablation(cfgs, test=a.test)
         print(res.drop(columns=[c for c in res.columns if c.startswith("_")]).round(4).to_string())
         save_artifacts(ex, res, a.out, "ablation_test" if a.test else "ablation_val")

@@ -12,7 +12,7 @@ from src.retrieval.similarity import candidate_cosine
 from src.retrieval.metrics import best_threshold
 from src.features.calibration import ScoreCalibrator
 from src.features.fusion import fuse, tune_weights, normalise_weights
-from src.evaluation.protocol import protocol
+from src.evaluation.protocol import protocol, QuerySet
 from src.evaluation.closed_set import evaluate_closed_set
 from src.evaluation.open_set import select_tau, evaluate_open_set
 
@@ -74,6 +74,7 @@ class Experiment:
             max_calibration_queries = kwargs.pop("max_cal_queries")
         if "step" in kwargs:
             weight_step = kwargs.pop("step")
+        self.max_queries = kwargs.pop("max_queries", None)
 
         self.dataframe = dataframe
         self.features = features
@@ -100,7 +101,17 @@ class Experiment:
     def _prepare_evaluation_splits(self, split: str, branches: Tuple[str, ...]) -> dict:
         """Prepares gallery rows, query sets, candidate shortlists, and raw branch scores."""
         gallery_rows, query_info = (self.gallery_val, self.query_val) if split == "val" else protocol(self.dataframe, "test")
-        cache_key = (split, tuple(branches))
+        if self.max_queries and len(query_info.rows) > self.max_queries:
+            rng = np.random.default_rng(self.seed)
+            sub_idx = np.sort(rng.choice(len(query_info.rows), self.max_queries, replace=False))
+            query_info = QuerySet(
+                rows=query_info.rows[sub_idx],
+                true=query_info.true[sub_idx],
+                known=query_info.known[sub_idx],
+                datasets=query_info.datasets[sub_idx],
+                species=query_info.species[sub_idx]
+            )
+        cache_key = (split, tuple(branches), len(query_info.rows))
         
         if cache_key in self._prepared_cache:
             return self._prepared_cache[cache_key]
