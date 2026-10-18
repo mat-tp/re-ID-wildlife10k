@@ -196,7 +196,7 @@ class Experiment:
             if objective == "BAKS":
                 from src.retrieval.metrics import closed_set_baks
                 return closed_set_baks(scores, predictions, prepared_data["q"].true, prepared_data["q"].datasets, prepared_data["q"].known)
-            return best_threshold(scores, predictions, prepared_data["q"].true, prepared_data["q"].datasets, prepared_data["q"].known, n_thresholds=60)["NBA"]
+            return best_threshold(scores, predictions, prepared_data["q"].true, prepared_data["q"].datasets, prepared_data["q"].known, n_thresholds=100)["NBA"]
 
         optimal_weights = normalise_weights(weights) if weights else tune_weights(calibrated_scores, objective_function, self.weight_step)[0]
         

@@ -8,10 +8,10 @@
   },
   "global+complementary": {
     "weights": {
-      "global": 1.0,
-      "complementary": 0.0
+      "global": 0.4,
+      "complementary": 0.6
     },
-    "tau": 0.806272029876709,
+    "tau": 0.34929129481315613,
     "species_tau": {}
   },
   "global+complementary+local": {
