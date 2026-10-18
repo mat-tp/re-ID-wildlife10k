@@ -1,181 +1,556 @@
 """
-Metrics for closed-set and open-set Re-ID .
+Evaluation Metrics for Closed-Set and Open-Set Re-Identification (Re-ID)
 
-The global-model comparison (MiewID vs fine-tuned MegaDescriptor) and the threshold tau must be judged with the SAME metric as the benchmark:
+Evaluates global vector search models and threshold performance against benchmark standards.
 
-  BAKS = mean over datasets of ( mean over known identities of ( mean over images of 1[correct] ) )
-  BAUS = mean over datasets of ( mean over unknown images of 1[predicted 'new'] ) )
-  closed-set score   = BAKS on known queries only (unknown queries ignored)   [WildlifeReID-10k, Sec 5.2]
-  open-set score     = (BAKS + BAUS) / 2  ("normalised balanced accuracy")     [WildlifeReID-10k, Sec 5.2]
+Key Metrics:
+- BAKS: Balanced Accuracy on Known Sets (mean accuracy across queries of known identities).
+- BAUS: Balanced Accuracy on Unknown Sets (mean accuracy of correctly identifying unseen identities).
+- Closed-Set Score: BAKS on known queries (ignoring unknown queries).
+- Open-Set Score: Normalized Balanced Accuracy (NBA = (BAKS + BAUS) / 2).
 
-Prediction rule: 1-nearest-neighbour by cosine similarity against the gallery;
-open-set -> answer "new individual" when the best similarity < tau.
-
-Some datasets have no unknown test images, so we
-average over the datasets that actually contain the relevant queries.
+Prediction Rule:
+Uses 1-Nearest-Neighbor based on cosine similarity against gallery features.
+For open-set evaluation, a query is classified as a "new individual" when best similarity < tau threshold.
 """
+
+from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 
-# Label for new (unknown) individuals
-NEW = "__new__"
+# Identifier label reserved for unseen or unknown identities
+UNKNOWN_IDENTITY_LABEL = "__new__"
 
 
-def nearest_neighbour(q, g, g_labels, chunk=512):
-    """q:(Nq,d) g:(Ng,d) L2-normalised float32. Returns best cosine sim and predicted label per query."""
-    g_labels = np.asarray(g_labels)
-    best_s = np.empty(len(q), np.float32); best_i = np.empty(len(q), np.int64)
-    gt = np.ascontiguousarray(g.T)
-    for a in range(0, len(q), chunk):
-        s = q[a:a + chunk] @ gt
-        best_i[a:a + chunk] = s.argmax(1)
-        best_s[a:a + chunk] = s[np.arange(len(s)), best_i[a:a + chunk]]
-    return best_s, g_labels[best_i]
+def find_nearest_neighbors(
+    query_features: np.ndarray,
+    gallery_features: np.ndarray,
+    gallery_labels: np.ndarray,
+    chunk_size: int = 512,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Finds the single nearest gallery neighbor for each query image based on cosine similarity.
+
+    Args:
+        query_features: Matrix of shape (N_queries, D) with L2-normalized feature vectors.
+        gallery_features: Matrix of shape (N_gallery, D) with L2-normalized feature vectors.
+        gallery_labels: Array of shape (N_gallery,) with label identities.
+        chunk_size: Query batch size for memory-efficient computation.
+
+    Returns:
+        Tuple containing:
+            - best_similarities: Array of shape (N_queries,) with peak cosine similarities.
+            - predicted_labels: Array of shape (N_queries,) with predicted identity labels.
+    """
+    labels_array = np.asarray(gallery_labels)
+    num_queries = len(query_features)
+
+    best_similarities = np.empty(num_queries, dtype=np.float32)
+    best_neighbor_indices = np.empty(num_queries, dtype=np.int64)
+
+    # Transpose gallery array once in contiguous layout for optimized matrix multiplication
+    gallery_transposed = np.ascontiguousarray(gallery_features.T)
+
+    # Process query batch in chunks to maintain low memory overhead
+    for start_idx in range(0, num_queries, chunk_size):
+        end_idx = min(start_idx + chunk_size, num_queries)
+        query_chunk = query_features[start_idx:end_idx]
+
+        # Compute cosine similarity matrix chunk of shape (chunk_size, N_gallery)
+        similarity_matrix = query_chunk @ gallery_transposed
+
+        # Find the column index of the maximum similarity score per query row
+        max_indices = similarity_matrix.argmax(axis=1)
+        row_indices = np.arange(len(similarity_matrix))
+
+        best_neighbor_indices[start_idx:end_idx] = max_indices
+        best_similarities[start_idx:end_idx] = similarity_matrix[row_indices, max_indices]
+
+    predicted_labels = labels_array[best_neighbor_indices]
+    return best_similarities, predicted_labels
 
 
-def topk_identity_accuracy(q, g, g_labels, q_labels, ks=(1, 5, 10), chunk=256):
-    """ top-k (k distinct identities). Not balanced, return dict of accuracy per k."""
+def compute_topk_identity_accuracy(
+    query_features: np.ndarray,
+    gallery_features: np.ndarray,
+    gallery_labels: np.ndarray,
+    query_labels: np.ndarray,
+    top_k_values: Tuple[int, ...] = (1, 5, 10),
+    chunk_size: int = 256,
+) -> Dict[int, float]:
+    """
+    Computes top-K accuracy considering distinct identities (Hit@K across distinct identities).
 
-    g_labels = np.asarray(g_labels); q_labels = np.asarray(q_labels)
-    hits = {k: 0 for k in ks}; gt = np.ascontiguousarray(g.T); kmax = max(ks)
-    for a in range(0, len(q), chunk):
-        s = q[a:a + chunk] @ gt
-        order = np.argsort(-s, axis=1)[:, :min(400, s.shape[1])]
-        for r, row in enumerate(order):
-            ids = []
-            for lab in g_labels[row]:
-                if lab not in ids:
-                    ids.append(lab)
-                if len(ids) == kmax:
+    Args:
+        query_features: Matrix of shape (N_queries, D) with normalized query features.
+        gallery_features: Matrix of shape (N_gallery, D) with normalized gallery features.
+        gallery_labels: Identity labels corresponding to gallery vectors.
+        query_labels: Ground truth identity labels for query images.
+        top_k_values: Tuple of K thresholds to evaluate.
+        chunk_size: Number of queries processed per batch chunk.
+
+    Returns:
+        Dictionary mapping each K value to its corresponding accuracy score.
+    """
+    labels_gallery = np.asarray(gallery_labels)
+    labels_query = np.asarray(query_labels)
+    num_queries = len(query_features)
+
+    hit_counts = {k: 0 for k in top_k_values}
+    gallery_transposed = np.ascontiguousarray(gallery_features.T)
+    max_k = max(top_k_values)
+
+    for start_idx in range(0, num_queries, chunk_size):
+        end_idx = min(start_idx + chunk_size, num_queries)
+        query_chunk = query_features[start_idx:end_idx]
+
+        similarity_matrix = query_chunk @ gallery_transposed
+        
+        # Sort candidate neighbors per query row up to a candidate buffer limit (400 max)
+        candidate_buffer_limit = min(400, similarity_matrix.shape[1])
+        top_candidate_indices = np.argsort(-similarity_matrix, axis=1)[:, :candidate_buffer_limit]
+
+        # Iterate over individual queries in current chunk
+        for row_offset, sorted_neighbor_rows in enumerate(top_candidate_indices):
+            query_idx = start_idx + row_offset
+            ground_truth_label = labels_query[query_idx]
+
+            # Extract distinct gallery identities preserving ranked similarity order
+            unique_identities: List[object] = []
+            for neighbor_idx in sorted_neighbor_rows:
+                candidate_identity = labels_gallery[neighbor_idx]
+                if candidate_identity not in unique_identities:
+                    unique_identities.append(candidate_identity)
+                if len(unique_identities) == max_k:
                     break
-            for k in ks:
-                hits[k] += q_labels[a + r] in ids[:k]
-    return {k: hits[k] / len(q) for k in ks}
+
+            # Evaluate top-K hits across distinct identities
+            for k in top_k_values:
+                if ground_truth_label in unique_identities[:k]:
+                    hit_counts[k] += 1
+
+    return {k: hit_counts[k] / num_queries for k in top_k_values}
 
 
-class _Groups:
-    """Pre-computes (dataset, identity) cells so that BAKS at many thresholds is cheap."""
-    def __init__(self, true, datasets, is_known):
-        true = np.asarray(true); datasets = np.asarray(datasets)
-        self.known = np.asarray(is_known, bool)
-        k = np.flatnonzero(self.known)
-        cell_key = np.char.add(datasets[k].astype(str), "||" + true[k].astype(str))
-        self.cells, self.cell_of = np.unique(cell_key, return_inverse=True)
-        self.cell_n = np.bincount(self.cell_of)
-        ds_of_cell = np.array([c.split("||")[0] for c in self.cells])
-        self.ds_names, self.ds_of_cell = np.unique(ds_of_cell, return_inverse=True)
-        self.ds_cells = np.bincount(self.ds_of_cell)
-        u = np.flatnonzero(~self.known)
-        self.u_idx = u
-        self.u_ds_names, self.u_ds = np.unique(datasets[u].astype(str), return_inverse=True)
-        self.u_n = np.bincount(self.u_ds) if len(u) else np.array([])
-        self.k_idx = k
+class BenchmarkGroupIndexer:
+    """
+    Pre-computes dataset and identity hierarchy groupings to allow fast evaluation 
+    of BAKS and BAUS across various decision thresholds (tau).
+    """
 
-    def baks(self, correct_known):
-        if len(self.k_idx) == 0:
+    def __init__(
+        self,
+        true_labels: np.ndarray,
+        dataset_names: np.ndarray,
+        is_known_mask: np.ndarray,
+    ) -> None:
+        """
+        Args:
+            true_labels: Ground truth identity labels array.
+            dataset_names: Array of dataset origin labels per query.
+            is_known_mask: Boolean mask indicating if query identity is present in gallery.
+        """
+        labels_arr = np.asarray(true_labels)
+        datasets_arr = np.asarray(dataset_names)
+        self.is_known_mask = np.asarray(is_known_mask, dtype=bool)
+
+        # Process known query samples
+        self.known_indices = np.flatnonzero(self.is_known_mask)
+        known_datasets = datasets_arr[self.known_indices].astype(str)
+        known_identities = labels_arr[self.known_indices].astype(str)
+
+        # Create composite dataset-identity keys to group queries by identity cells
+        composite_cell_keys = np.char.add(known_datasets, "||" + known_identities)
+        self.unique_cell_names, self.query_to_cell_mapping = np.unique(
+            composite_cell_keys, return_inverse=True
+        )
+        self.queries_per_cell_count = np.bincount(self.query_to_cell_mapping)
+
+        # Map each individual cell to its parent dataset
+        dataset_of_each_cell = np.array([cell.split("||")[0] for cell in self.unique_cell_names])
+        self.dataset_names, self.cell_to_dataset_mapping = np.unique(
+            dataset_of_each_cell, return_inverse=True
+        )
+        self.cells_per_dataset_count = np.bincount(self.cell_to_dataset_mapping)
+
+        # Process unknown query samples (unseen identities)
+        self.unknown_indices = np.flatnonzero(~self.is_known_mask)
+        unknown_datasets = datasets_arr[self.unknown_indices].astype(str)
+        self.unknown_dataset_names, self.unknown_query_to_dataset_mapping = np.unique(
+            unknown_datasets, return_inverse=True
+        )
+        self.queries_per_unknown_dataset_count = (
+            np.bincount(self.unknown_query_to_dataset_mapping)
+            if len(self.unknown_indices) > 0
+            else np.array([])
+        )
+
+    def calculate_baks(self, is_correct_known_predictions: np.ndarray) -> float:
+        """Calculates Balanced Accuracy on Known Sets (BAKS)."""
+        if len(self.known_indices) == 0:
             return float("nan")
-        cell = np.bincount(self.cell_of, weights=correct_known[self.k_idx].astype(float)) / self.cell_n
-        ds = np.bincount(self.ds_of_cell, weights=cell) / self.ds_cells
-        return float(ds.mean())
 
-    def baus(self, correct_unknown):
-        if len(self.u_idx) == 0:
+        # Compute accuracy per identity cell: average correct predictions within each cell
+        known_correct_mask = is_correct_known_predictions[self.known_indices].astype(float)
+        cell_accuracies = (
+            np.bincount(self.query_to_cell_mapping, weights=known_correct_mask)
+            / self.queries_per_cell_count
+        )
+
+        # Compute accuracy per dataset: average cell accuracies within each dataset
+        dataset_accuracies = (
+            np.bincount(self.cell_to_dataset_mapping, weights=cell_accuracies)
+            / self.cells_per_dataset_count
+        )
+
+        # Return mean accuracy across all participating datasets
+        return float(np.mean(dataset_accuracies))
+
+    def calculate_baus(self, is_correct_unknown_predictions: np.ndarray) -> float:
+        """Calculates Balanced Accuracy on Unknown Sets (BAUS)."""
+        if len(self.unknown_indices) == 0:
             return float("nan")
-        ds = np.bincount(self.u_ds, weights=correct_unknown[self.u_idx].astype(float)) / self.u_n
-        return float(ds.mean())
+
+        # Compute accuracy per unknown dataset: average correct 'new' identifications per dataset
+        unknown_correct_mask = is_correct_unknown_predictions[self.unknown_indices].astype(float)
+        dataset_accuracies = (
+            np.bincount(self.unknown_query_to_dataset_mapping, weights=unknown_correct_mask)
+            / self.queries_per_unknown_dataset_count
+        )
+
+        # Return mean accuracy across datasets containing unknown queries
+        return float(np.mean(dataset_accuracies))
 
 
-def closed_set_baks(best_sim, pred, true, datasets, is_known):
-    """Closed set: unknown queries ignored, no threshold."""
-    G = _Groups(true, datasets, is_known)
-    return G.baks(np.asarray(pred) == np.asarray(true))
+def compute_closed_set_baks(
+    best_similarities: np.ndarray,
+    predicted_labels: np.ndarray,
+    true_labels: np.ndarray,
+    dataset_names: np.ndarray,
+    is_known_mask: np.ndarray,
+) -> float:
+    """Computes closed-set BAKS score (unknown queries ignored, no threshold applied)."""
+    indexer = BenchmarkGroupIndexer(true_labels, dataset_names, is_known_mask)
+    correct_predictions = np.asarray(predicted_labels) == np.asarray(true_labels)
+    return indexer.calculate_baks(correct_predictions)
 
 
-def open_set_at(tau, best_sim, pred, true, datasets, is_known, _G=None):
-    G = _G or _Groups(true, datasets, is_known)
-    best_sim = np.asarray(best_sim); accepted = best_sim >= tau
-    correct_known = (np.asarray(pred) == np.asarray(true)) & accepted
-    correct_unknown = ~accepted
-    b, u = G.baks(correct_known), G.baus(correct_unknown)
-    return {"tau": float(tau), "BAKS": b, "BAUS": u, "NBA": float(np.nanmean([b, u]))}
+def evaluate_open_set_at_threshold(
+    threshold_tau: float,
+    best_similarities: np.ndarray,
+    predicted_labels: np.ndarray,
+    true_labels: np.ndarray,
+    dataset_names: np.ndarray,
+    is_known_mask: np.ndarray,
+    group_indexer: Optional[BenchmarkGroupIndexer] = None,
+) -> Dict[str, float]:
+    """
+    Evaluates open-set performance (BAKS, BAUS, NBA) at a specific similarity threshold tau.
+
+    Args:
+        threshold_tau: Similarity score threshold above which a query is assigned a gallery identity.
+        best_similarities: Array of top-1 similarity scores per query.
+        predicted_labels: Array of predicted top-1 identity labels.
+        true_labels: Array of ground truth identity labels.
+        dataset_names: Dataset source identifier for each query.
+        is_known_mask: Boolean mask indicating if query identity is present in gallery.
+        group_indexer: Cached BenchmarkGroupIndexer instance for accelerated batch processing.
+
+    Returns:
+        Dictionary containing threshold tau, BAKS, BAUS, and Normalized Balanced Accuracy (NBA).
+    """
+    indexer = group_indexer or BenchmarkGroupIndexer(true_labels, dataset_names, is_known_mask)
+    similarities = np.asarray(best_similarities)
+
+    # Acceptance rule: similarity must meet or exceed threshold tau
+    is_accepted = similarities >= threshold_tau
+
+    # Known query is correct if identity matches AND similarity is above threshold tau
+    correct_known = (np.asarray(predicted_labels) == np.asarray(true_labels)) & is_accepted
+    
+    # Unknown query is correct if similarity is below threshold tau (classified as new identity)
+    correct_unknown = ~is_accepted
+
+    baks_score = indexer.calculate_baks(correct_known)
+    baus_score = indexer.calculate_baus(correct_unknown)
+    nba_score = float(np.nanmean([baks_score, baus_score]))
+
+    return {
+        "tau": float(threshold_tau),
+        "BAKS": baks_score,
+        "BAUS": baus_score,
+        "NBA": nba_score,
+    }
 
 
-def open_set_curve(best_sim, pred, true, datasets, is_known, n_thresholds=200):
-    """BAKS/BAUS at many thresholds + AUC of BAUS-vs-BAKS (the curve drawn in WildlifeReID-10k Fig. 5)."""
-    G = _Groups(true, datasets, is_known)
-    taus = np.unique(np.quantile(best_sim, np.linspace(0, 1, n_thresholds)))
-    taus = np.concatenate([[best_sim.min() - 1e-6], taus, [best_sim.max() + 1e-6]])
-    rows = [open_set_at(t, best_sim, pred, true, datasets, is_known, G) for t in taus]
-    b = np.array([r["BAKS"] for r in rows]); u = np.array([r["BAUS"] for r in rows])
-    o = np.argsort(b)
-    bo, uo = b[o], u[o]
-    auc = float(np.sum((bo[1:] - bo[:-1]) * (uo[1:] + uo[:-1]) / 2))   # trapezoid rule (np.trapz removed in NumPy 2)
-    return rows, auc
+def compute_open_set_curve(
+    best_similarities: np.ndarray,
+    predicted_labels: np.ndarray,
+    true_labels: np.ndarray,
+    dataset_names: np.ndarray,
+    is_known_mask: np.ndarray,
+    num_thresholds: int = 200,
+    **kwargs
+) -> Tuple[List[Dict[str, float]], float]:
+    if "n_thresholds" in kwargs:
+        num_thresholds = kwargs.pop("n_thresholds")
+    """
+    Computes open-set BAKS and BAUS across multiple thresholds and calculates Area Under Curve (AUC).
+
+    Returns:
+        Tuple containing list of metric evaluation dictionaries per threshold, and total AUC.
+    """
+    indexer = BenchmarkGroupIndexer(true_labels, dataset_names, is_known_mask)
+    similarities = np.asarray(best_similarities)
+
+    # Sample quantiles across similarity scores to evaluate thresholds evenly
+    quantile_points = np.linspace(0, 1, num_thresholds)
+    threshold_values = np.unique(np.quantile(similarities, quantile_points))
+    
+    # Prepend and append extreme boundary values
+    threshold_values = np.concatenate(
+        [[similarities.min() - 1e-6], threshold_values, [similarities.max() + 1e-6]]
+    )
+
+    evaluation_rows = [
+        evaluate_open_set_at_threshold(
+            tau, similarities, predicted_labels, true_labels, dataset_names, is_known_mask, indexer
+        )
+        for tau in threshold_values
+    ]
+
+    baks_values = np.array([row["BAKS"] for row in evaluation_rows])
+    baus_values = np.array([row["BAUS"] for row in evaluation_rows])
+
+    # Sort points by ascending BAKS values for trapezoidal integration
+    sort_order = np.argsort(baks_values)
+    sorted_baks = baks_values[sort_order]
+    sorted_baus = baus_values[sort_order]
+
+    # Calculate AUC using trapezoidal rule manual summation (NumPy 2.0 compatible)
+    auc_score = float(
+        np.sum((sorted_baks[1:] - sorted_baks[:-1]) * (sorted_baus[1:] + sorted_baus[:-1]) / 2.0)
+    )
+
+    return evaluation_rows, auc_score
 
 
-def best_threshold(best_sim, pred, true, datasets, is_known, n_thresholds=200):
-    """tau maximising (BAKS+BAUS)/2 on VALIDATION data. Never call this on the test set."""
-    rows, _ = open_set_curve(best_sim, pred, true, datasets, is_known, n_thresholds)
-    return max(rows, key=lambda r: r["NBA"])
+def find_optimal_threshold(
+    best_similarities: np.ndarray,
+    predicted_labels: np.ndarray,
+    true_labels: np.ndarray,
+    dataset_names: np.ndarray,
+    is_known_mask: np.ndarray,
+    num_thresholds: int = 200,
+    **kwargs
+) -> Dict[str, float]:
+    if "n_thresholds" in kwargs:
+        num_thresholds = kwargs.pop("n_thresholds")
+    """Finds decision threshold tau maximizing Normalized Balanced Accuracy (NBA) on validation data."""
+    evaluation_rows, _ = compute_open_set_curve(
+        best_similarities, predicted_labels, true_labels, dataset_names, is_known_mask, num_thresholds
+    )
+    return max(evaluation_rows, key=lambda row: row["NBA"])
 
 
-def best_threshold_per_group(best_sim, pred, true, datasets, is_known, groups, min_unknown=20, min_known=20):
-    """Per-species (or per-dataset) tau [PROPOSAL: 'calibrated separately by species where supported'].
-    Falls back to the global tau for groups with too few known/unknown validation queries."""
-    best_sim = np.asarray(best_sim); groups = np.asarray(groups); is_known = np.asarray(is_known, bool)
-    glob = best_threshold(best_sim, pred, true, datasets, is_known)["tau"]
-    out = {}
-    for g in np.unique(groups):
-        m = groups == g
-        if (~is_known[m]).sum() < min_unknown or is_known[m].sum() < min_known:
-            out[g] = glob; continue
-        out[g] = best_threshold(best_sim[m], np.asarray(pred)[m], np.asarray(true)[m],
-                                np.asarray(datasets)[m], is_known[m])["tau"]
-    return out, glob
+
+def find_optimal_threshold_per_group(
+    best_similarities: np.ndarray,
+    predicted_labels: np.ndarray,
+    true_labels: np.ndarray,
+    dataset_names: np.ndarray,
+    is_known_mask: np.ndarray,
+    group_identifiers: np.ndarray,
+    min_unknown_samples: int = 20,
+    min_known_samples: int = 20,
+) -> Tuple[Dict[object, float], float]:
+    """
+    Calibrates individual tau thresholds per species or dataset group.
+
+    Falls back to global optimal threshold if sample count in a group is insufficient.
+    """
+    similarities = np.asarray(best_similarities)
+    groups = np.asarray(group_identifiers)
+    known_mask = np.asarray(is_known_mask, dtype=bool)
+
+    # Compute global fallback threshold
+    global_optimal_tau = find_optimal_threshold(
+        similarities, predicted_labels, true_labels, dataset_names, known_mask
+    )["tau"]
+
+    group_threshold_map: Dict[object, float] = {}
+
+    for group_name in np.unique(groups):
+        group_mask = groups == group_name
+        
+        known_count = known_mask[group_mask].sum()
+        unknown_count = (~known_mask[group_mask]).sum()
+
+        # Fall back if sample count constraints are not met
+        if unknown_count < min_unknown_samples or known_count < min_known_samples:
+            group_threshold_map[group_name] = global_optimal_tau
+            continue
+
+        group_tau = find_optimal_threshold(
+            similarities[group_mask],
+            np.asarray(predicted_labels)[group_mask],
+            np.asarray(true_labels)[group_mask],
+            np.asarray(dataset_names)[group_mask],
+            known_mask[group_mask],
+        )["tau"]
+        group_threshold_map[group_name] = group_tau
+
+    return group_threshold_map, global_optimal_tau
 
 
-def evaluate_open_set_per_group(best_sim, pred, true, datasets, is_known, groups, taus, fallback):
-    tau_q = np.array([taus.get(g, fallback) for g in np.asarray(groups)])
-    G = _Groups(true, datasets, is_known)
-    accepted = np.asarray(best_sim) >= tau_q
-    b = G.baks((np.asarray(pred) == np.asarray(true)) & accepted); u = G.baus(~accepted)
-    return {"BAKS": b, "BAUS": u, "NBA": float(np.nanmean([b, u]))}
+def evaluate_open_set_with_group_thresholds(
+    best_similarities: np.ndarray,
+    predicted_labels: np.ndarray,
+    true_labels: np.ndarray,
+    dataset_names: np.ndarray,
+    is_known_mask: np.ndarray,
+    group_identifiers: np.ndarray,
+    threshold_map: Dict[object, float],
+    fallback_threshold: float,
+) -> Dict[str, float]:
+    """Evaluates open-set metrics using calibrated per-group thresholds."""
+    similarities = np.asarray(best_similarities)
+    groups = np.asarray(group_identifiers)
+
+    # Resolve threshold dynamically for each individual query based on group membership
+    query_thresholds = np.array(
+        [threshold_map.get(group, fallback_threshold) for group in groups]
+    )
+
+    indexer = BenchmarkGroupIndexer(true_labels, dataset_names, is_known_mask)
+    is_accepted = similarities >= query_thresholds
+
+    correct_known = (np.asarray(predicted_labels) == np.asarray(true_labels)) & is_accepted
+    correct_unknown = ~is_accepted
+
+    baks_score = indexer.calculate_baks(correct_known)
+    baus_score = indexer.calculate_baus(correct_unknown)
+    nba_score = float(np.nanmean([baks_score, baus_score]))
+
+    return {"BAKS": baks_score, "BAUS": baus_score, "NBA": nba_score}
 
 
-# Metrics computed from a ranked shortlist (retrieval.search.Ranked): top-k identity accuracy and mAP@K
-def ranked_topk_accuracy(ranked_ids, true, is_known, ks=(1, 5, 10)):
-    """ranked_ids: (Nq,K) identity of each candidate image, best first. Known queries only.
-    Hit@k = true identity among the first k DISTINCT identities."""
-    ranked_ids = np.asarray(ranked_ids); true = np.asarray(true)
-    kn = np.flatnonzero(is_known); hits = {k: 0 for k in ks}
-    for i in kn:
-        seen = []
-        for lab in ranked_ids[i]:
-            if lab not in seen:
-                seen.append(lab)
-            if len(seen) >= max(ks):
+def compute_ranked_topk_accuracy(
+    ranked_candidate_ids: np.ndarray,
+    true_labels: np.ndarray,
+    is_known_mask: np.ndarray,
+    top_k_values: Tuple[int, ...] = (1, 5, 10),
+) -> Dict[int, float]:
+    """
+    Computes top-K accuracy from a candidate shortlist for known queries.
+
+    Hit@K is recorded if the ground truth identity appears within the first K distinct gallery identities.
+    """
+    candidate_ids = np.asarray(ranked_candidate_ids)
+    labels = np.asarray(true_labels)
+    known_indices = np.flatnonzero(is_known_mask)
+
+    hit_counts = {k: 0 for k in top_k_values}
+    max_k = max(top_k_values)
+
+    for query_idx in known_indices:
+        ground_truth = labels[query_idx]
+        
+        # Collect distinct candidate identities up to max_k limit
+        unique_candidates: List[object] = []
+        for candidate in candidate_ids[query_idx]:
+            if candidate not in unique_candidates:
+                unique_candidates.append(candidate)
+            if len(unique_candidates) >= max_k:
                 break
-        for k in ks:
-            hits[k] += true[i] in seen[:k]
-    return {k: hits[k] / max(len(kn), 1) for k in ks}
+
+        for k in top_k_values:
+            if ground_truth in unique_candidates[:k]:
+                hit_counts[k] += 1
+
+    total_known_queries = max(len(known_indices), 1)
+    return {k: hit_counts[k] / total_known_queries for k in top_k_values}
 
 
-def ranked_average_precision(ranked_ids, true, n_pos):
-    """AP@K per query. n_pos[i] = number of gallery images of the true identity; the denominator is
-    min(n_pos, K) so a perfect ranking scores 1 even though the list is truncated. Unknown queries -> nan."""
-    rel = (np.asarray(ranked_ids) == np.asarray(true)[:, None]).astype(np.float64)
-    K = rel.shape[1]
-    prec = np.cumsum(rel, 1) / np.arange(1, K + 1)
-    denom = np.minimum(np.asarray(n_pos, float), K)
+def compute_ranked_average_precision(
+    ranked_candidate_ids: np.ndarray,
+    true_labels: np.ndarray,
+    total_positive_gallery_counts: np.ndarray,
+) -> np.ndarray:
+    """
+    Computes Average Precision (AP@K) per query from a ranked candidate shortlist.
+
+    Args:
+        ranked_candidate_ids: Array of shape (N_queries, K_candidates) with candidate identities.
+        true_labels: Array of shape (N_queries,) with ground truth identity labels.
+        total_positive_gallery_counts: Total ground truth gallery images matching the true identity per query.
+
+    Returns:
+        Array of AP@K scores per query. Unknown queries evaluate to NaN.
+    """
+    candidate_ids = np.asarray(ranked_candidate_ids)
+    true_labels_matrix = np.asarray(true_labels)[:, None]
+    
+    # Binary relevance mask: 1 where candidate matches ground truth, 0 elsewhere
+    relevance_matrix = (candidate_ids == true_labels_matrix).astype(np.float64)
+    k_candidates = relevance_matrix.shape[1]
+
+    # Cumulative sum of true positives divided by position index gives precision at each rank
+    cumulative_hits = np.cumsum(relevance_matrix, axis=1)
+    rank_positions = np.arange(1, k_candidates + 1)
+    precision_at_ranks = cumulative_hits / rank_positions
+
+    # Denominator truncated at shortlist length K
+    normalizing_denominators = np.minimum(
+        np.asarray(total_positive_gallery_counts, dtype=float), k_candidates
+    )
+
     with np.errstate(invalid="ignore", divide="ignore"):
-        ap = (prec * rel).sum(1) / denom
-    ap[denom == 0] = np.nan
-    return ap
+        average_precisions = (
+            np.sum(precision_at_ranks * relevance_matrix, axis=1) / normalizing_denominators
+        )
+
+    # Set unknown queries (where positive gallery count is 0) to NaN
+    average_precisions[normalizing_denominators == 0] = np.nan
+    return average_precisions
 
 
-def dataset_balanced_mean(values, datasets, mask):
-    """Mean of per-dataset means over the queries selected by `mask` (every dataset counts equally)."""
-    values, datasets = np.asarray(values, float)[mask], np.asarray(datasets)[mask]
-    if len(values) == 0:
+def compute_dataset_balanced_mean(
+    metric_values: np.ndarray,
+    dataset_names: np.ndarray,
+    selection_mask: np.ndarray,
+) -> float:
+    """Computes dataset-balanced mean score, weighting each dataset equally regardless of query count."""
+    selected_values = np.asarray(metric_values, dtype=float)[selection_mask]
+    selected_datasets = np.asarray(dataset_names)[selection_mask]
+
+    if len(selected_values) == 0:
         return float("nan")
-    return float(np.mean([np.nanmean(values[datasets == d]) for d in np.unique(datasets)
-                          if not np.all(np.isnan(values[datasets == d]))]))
+
+    unique_datasets = np.unique(selected_datasets)
+    per_dataset_means: List[float] = []
+
+    for dataset in unique_datasets:
+        dataset_mask = selected_datasets == dataset
+        dataset_values = selected_values[dataset_mask]
+
+        if not np.all(np.isnan(dataset_values)):
+            per_dataset_means.append(float(np.nanmean(dataset_values)))
+
+    if len(per_dataset_means) == 0:
+        return float("nan")
+
+    return float(np.mean(per_dataset_means))
+
+
+# Backwards compatibility aliases
+nearest_neighbour = find_nearest_neighbors
+topk_accuracy = compute_topk_identity_accuracy
+closed_set_baks = compute_closed_set_baks
+open_set_at = evaluate_open_set_at_threshold
+open_set_curve = compute_open_set_curve
+best_threshold = find_optimal_threshold
+best_threshold_per_group = find_optimal_threshold_per_group
+evaluate_open_set_per_group = evaluate_open_set_with_group_thresholds
+ranked_topk_accuracy = compute_ranked_topk_accuracy
+ranked_average_precision = compute_ranked_average_precision
+dataset_balanced_mean = compute_dataset_balanced_mean
