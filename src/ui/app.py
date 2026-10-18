@@ -91,7 +91,8 @@ with tab_id:
             except Exception as e:
                 st.error(f"Cannot embed uploaded image: {e}")
     if qvec is not None and st.button("Search", type="primary"):
-        out = svc.search(qvec, cfg, k=k, tau=tau)
+        with st.spinner("This may take a moment."):
+            out = svc.search(qvec, cfg, k=k, tau=tau)
         if out["verdict"] == NEW:
             st.warning(f"**New individual** (best score {out['best_score']:.3f} < tau {out['tau']:.3f})")
         else:
