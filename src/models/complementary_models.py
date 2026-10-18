@@ -1,80 +1,111 @@
 """
-Complementary visual representations for wildlife individual Re-ID.
+Complementary Visual Representations for Wildlife Individual Re-ID
 
-Models implemented:
-1. ComplementaryModel (EVA02) - general visual representation from large-scale image data
-   - Not specifically trained for wildlife Re-ID
-   - Provides complementary information alongside the global descriptor
+Implements the EVA02 vision transformer backbone to extract complementary general-purpose
+visual features for wildlife individual re-identification tasks.
 
 Reference:
 - EVA02 paper: Fang et al., Image and Vision Computing 149 (2024)
 """
 
+from typing import Dict, Optional, Tuple, Union
+import os
+import numpy as np
+from PIL import Image
+import timm
+from timm.data import resolve_model_data_config
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
-import timm
-import numpy as np
-from PIL import Image
-from timm.data import resolve_model_data_config
 
 
-# Helper function to convert images to PIL format
-def _to_pil(image):
-    if isinstance(image, Image.Image):
-        return image.convert("RGB")
-    if isinstance(image, np.ndarray):
-        return Image.fromarray(image)
-    raise TypeError(f"Unsupported image type: {type(image)}. Expected PIL.Image or np.ndarray.")
+def convert_to_pil_image(image_input: Union[Image.Image, np.ndarray]) -> Image.Image:
+    """
+    Converts input image arrays or PIL objects into standard RGB PIL Image format.
+
+    Args:
+        image_input: Input image as a PIL Image object or an HWC NumPy ndarray.
+
+    Returns:
+        RGB PIL Image object.
+
+    Raises:
+        TypeError: If image_input is not a PIL Image or NumPy ndarray.
+    """
+    if isinstance(image_input, Image.Image):
+        return image_input.convert("RGB")
+    if isinstance(image_input, np.ndarray):
+        return Image.fromarray(image_input)
+    raise TypeError(
+        f"Unsupported image input type: {type(image_input)}. Expected PIL.Image.Image or np.ndarray."
+    )
 
 
-# Helper to resolve device
-def _device(device):
-    if device is not None:
-        return torch.device(device)
+def resolve_execution_device(
+    user_device: Optional[Union[str, torch.device]] = None
+) -> torch.device:
+    """
+    Resolves target PyTorch execution device, defaulting to CUDA if available.
+
+    Args:
+        user_device: Optional user-specified target device string or torch.device.
+
+    Returns:
+        Resolved torch.device object.
+    """
+    if user_device is not None:
+        return torch.device(user_device)
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-# EVA02 model implementation - complementary representation
-class ComplementaryModel(nn.Module):
+class ComplementaryFeatureExtractor(nn.Module):
+    """
+    EVA02 vision transformer model wrapper for extracting complementary visual features.
 
-    DEFAULT_TIMM_ID = "eva02_base_patch14_224.mim_in22k"
+    Extracts general-purpose visual representations pre-trained on large-scale image data
+    to complement domain-specific global feature descriptors during multi-modal fusion.
+    """
 
-    def __init__(self, timm_id: str = DEFAULT_TIMM_ID):
+    DEFAULT_TIMM_MODEL_ID: str = "eva02_base_patch14_224.mim_in22k"
+
+    def __init__(self, timm_model_id: str = DEFAULT_TIMM_MODEL_ID) -> None:
+        """
+        Args:
+            timm_model_id: Architecture identifier string for timm model instantiation.
+        """
         super().__init__()
 
-        self.timm_id = timm_id
+        self.timm_model_id = timm_model_id
 
-        # Load EVA02 without classification head, using average pooling for fixed-length output
+        # Instantiates EVA02 backbone without classification head, using global average pooling
         try:
             self.backbone = timm.create_model(
-                timm_id,
+                timm_model_id,
                 pretrained=True,
                 num_classes=0,
                 global_pool="avg",
             )
         except Exception:
-            # Fallback to local cache if network is unavailable
-            import os
+            # Fall back to offline HuggingFace local hub cache if network request fails
             os.environ["HF_HUB_OFFLINE"] = "1"
             self.backbone = timm.create_model(
-                timm_id,
+                timm_model_id,
                 pretrained=True,
                 num_classes=0,
                 global_pool="avg",
             )
 
-        # Resolve preprocessing config from the model so mean, std and input size always match
-        self.data_config = resolve_model_data_config(self.backbone)
-        self.input_size = int(self.data_config["input_size"][-1])
-        self.embedding_dim = self.backbone.num_features
+        # Resolve model data configurations (mean, std, and input image resolution) dynamically
+        self.data_config: Dict[str, object] = resolve_model_data_config(self.backbone)
+        self.input_resolution: int = int(self.data_config["input_size"][-1])
+        self.embedding_dim: int = self.backbone.num_features
 
-    # Preprocessing for inference
-    def eval_transform(self):
+    def get_evaluation_transform(self) -> transforms.Compose:
+        """Constructs image preprocessing pipeline for evaluation and inference."""
         return transforms.Compose([
-            transforms.Lambda(_to_pil),
-            transforms.Resize((self.input_size, self.input_size)),
+            transforms.Lambda(convert_to_pil_image),
+            transforms.Resize((self.input_resolution, self.input_resolution)),
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=self.data_config["mean"],
@@ -82,13 +113,15 @@ class ComplementaryModel(nn.Module):
             ),
         ])
 
-    # Preprocessing for training with augmentation
-    def train_transform(self):
+    def get_training_transform(self) -> transforms.Compose:
+        """Constructs image preprocessing pipeline with data augmentations for fine-tuning."""
         return transforms.Compose([
-            transforms.Lambda(_to_pil),
-            transforms.Resize((self.input_size, self.input_size)),
+            transforms.Lambda(convert_to_pil_image),
+            transforms.Resize((self.input_resolution, self.input_resolution)),
             transforms.RandomHorizontalFlip(),
-            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.1),
+            transforms.ColorJitter(
+                brightness=0.2, contrast=0.2, saturation=0.1, hue=0.1
+            ),
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=self.data_config["mean"],
@@ -96,25 +129,48 @@ class ComplementaryModel(nn.Module):
             ),
         ])
 
-    def forward(self, x):
-        return self.backbone(x)
+    def forward(self, input_tensors: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass through the EVA02 vision transformer backbone.
 
-    # Extract L2-normalised embeddings
-    def embed(self, x):
+        Args:
+            input_tensors: Input tensor batch of shape (B, C, H, W).
+
+        Returns:
+            Unnormalized global feature embeddings of shape (B, embedding_dim).
+        """
+        return self.backbone(input_tensors)
+
+    def extract_l2_normalized_embeddings(
+        self, input_tensors: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Extracts L2-normalized feature representations for cosine similarity evaluation.
+
+        Args:
+            input_tensors: Input tensor batch of shape (B, C, H, W).
+
+        Returns:
+            L2-normalized feature embedding tensor of shape (B, embedding_dim) in float32 precision.
+        """
         with torch.no_grad():
-            return F.normalize(self.forward(x).float(), dim=1)
+            raw_embeddings = self.forward(input_tensors).float()
+            return F.normalize(raw_embeddings, p=2, dim=1)
 
-    # Save backbone weights to disk
-    def save(self, path):
-        torch.save(
-            {"timm_id": self.timm_id, "backbone": self.backbone.state_dict()},
-            path,
+    def save_checkpoint(self, checkpoint_filepath: str) -> None:
+        """Saves model configuration and backbone weights to disk."""
+        checkpoint_data = {
+            "timm_model_id": self.timm_model_id,
+            "backbone_state_dict": self.backbone.state_dict(),
+        }
+        torch.save(checkpoint_data, checkpoint_filepath)
+
+    def load_checkpoint(self, checkpoint_filepath: str) -> None:
+        """Loads backbone state weights from a saved checkpoint file."""
+        checkpoint_state = torch.load(checkpoint_filepath, map_location="cpu")
+
+        # Supports both legacy and new checkpoint dictionary keys
+        backbone_weights = checkpoint_state.get(
+            "backbone_state_dict", checkpoint_state.get("backbone")
         )
-
-    def load(self, path):
-        state = torch.load(path, map_location="cpu")
-        self.backbone.load_state_dict(state["backbone"], strict=True)
-
-
-
-
+        self.backbone.load_state_dict(backbone_weights, strict=True)
