@@ -13,7 +13,6 @@ data/
 __pycache__/
 features/
 checkpoints/
-results/
 
 !docs/main.pdf
 

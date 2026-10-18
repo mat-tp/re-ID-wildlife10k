@@ -1,0 +1,31 @@
+{
+  "global": {
+    "weights": {
+      "global": 1.0
+    },
+    "tau": 0.5201234817504883,
+    "species_tau": {}
+  },
+  "complementary": {
+    "weights": {
+      "complementary": 1.0
+    },
+    "tau": 0.11907611042261124,
+    "species_tau": {}
+  },
+  "baseline": {
+    "weights": {
+      "baseline": 1.0
+    },
+    "tau": 0.23086394369602203,
+    "species_tau": {}
+  },
+  "global+complementary": {
+    "weights": {
+      "global": 0.8,
+      "complementary": 0.2
+    },
+    "tau": 0.4232793078949703,
+    "species_tau": {}
+  }
+}
