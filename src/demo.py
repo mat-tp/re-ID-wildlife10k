@@ -156,3 +156,8 @@ class DemoLocalScorer:
         ).astype(np.float32)
 
         return synthetic_scores
+
+
+# Backward compatibility aliases
+make_demo_features = generate_demo_features
+MockLocalFeatureScorer = DemoLocalScorer
