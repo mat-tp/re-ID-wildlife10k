@@ -10,7 +10,7 @@ Key Protocol Design:
 """
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, Optional
 import numpy as np
 import pandas as pd
 
@@ -44,6 +44,31 @@ class QuerySet:
     is_known_query_mask: np.ndarray
     dataset_origin_names: np.ndarray
     species_classification_names: np.ndarray
+
+    def __init__(
+        self,
+        sample_row_indices: Optional[np.ndarray] = None,
+        ground_truth_identities: Optional[np.ndarray] = None,
+        is_known_query_mask: Optional[np.ndarray] = None,
+        dataset_origin_names: Optional[np.ndarray] = None,
+        species_classification_names: Optional[np.ndarray] = None,
+        **kwargs,
+    ):
+        self.sample_row_indices = (
+            sample_row_indices if sample_row_indices is not None else kwargs.get("rows")
+        )
+        self.ground_truth_identities = (
+            ground_truth_identities if ground_truth_identities is not None else kwargs.get("true")
+        )
+        self.is_known_query_mask = (
+            is_known_query_mask if is_known_query_mask is not None else kwargs.get("known")
+        )
+        self.dataset_origin_names = (
+            dataset_origin_names if dataset_origin_names is not None else kwargs.get("datasets")
+        )
+        self.species_classification_names = (
+            species_classification_names if species_classification_names is not None else kwargs.get("species")
+        )
 
     # Backward compatibility properties for legacy code consumption
     @property

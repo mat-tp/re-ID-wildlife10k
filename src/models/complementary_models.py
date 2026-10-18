@@ -174,3 +174,7 @@ class ComplementaryFeatureExtractor(nn.Module):
             "backbone_state_dict", checkpoint_state.get("backbone")
         )
         self.backbone.load_state_dict(backbone_weights, strict=True)
+
+
+# Backward compatibility alias
+ComplementaryModel = ComplementaryFeatureExtractor

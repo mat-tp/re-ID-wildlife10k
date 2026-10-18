@@ -312,6 +312,15 @@ class LocalFeatureMatcher:
             query_features, gallery_features, use_ransac_verification
         )
 
+    # Backward compatibility method aliases
+    extract = extract_features
+    match = match_features
+    score_pair = compute_pair_score
+
+
+# Backward compatibility alias
+LocalModel = LocalFeatureMatcher
+
 
 if __name__ == "__main__":
     # Smoke test execution with random noise images
