@@ -1,4 +1,11 @@
 {
+  "baseline": {
+    "weights": {
+      "baseline": 1.0
+    },
+    "tau": 0.07094717025756836,
+    "species_tau": {}
+  },
   "global": {
     "weights": {
       "global": 1.0
@@ -12,6 +19,14 @@
       "complementary": 0.6
     },
     "tau": 0.34929129481315613,
+    "species_tau": {}
+  },
+  "global+local": {
+    "weights": {
+      "global": 0.7,
+      "local": 0.3
+    },
+    "tau": 0.667889952659607,
     "species_tau": {}
   },
   "global+complementary+local": {
