@@ -31,8 +31,12 @@ def normalize_l2(
         L2-normalized feature array of shape (N, D) in float32 format.
     """
     vectors = np.asarray(feature_vectors, dtype=np.float32)
+    was_1d = vectors.ndim == 1
+    if was_1d:
+        vectors = vectors[None, :]
     vector_norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-    return vectors / np.maximum(vector_norms, epsilon)
+    normalized = vectors / np.maximum(vector_norms, epsilon)
+    return normalized[0] if was_1d else normalized
 
 
 def find_top_k_cosine_neighbors(
@@ -241,11 +245,19 @@ class LocalFeatureScorer:
 
     def extract_image(self, image) -> object:
         """Extracts ALIKED keypoints for a raw PIL or NumPy image."""
-        return self.local_model.extract(image)
+        if hasattr(self.local_model, "extract"):
+            return self.local_model.extract(image)
+        return self.local_model.extract_features(image)
 
     def score_features_pair(self, feats0, feats1) -> float:
         """Scores a pair of pre-extracted local feature dictionaries."""
-        return float(self.local_model.score(feats0, feats1, use_ransac=self.use_ransac))
+        if hasattr(self.local_model, "score"):
+            return float(self.local_model.score(feats0, feats1, use_ransac=self.use_ransac))
+        if hasattr(self.local_model, "compute_pair_score"):
+            return float(self.local_model.compute_pair_score(feats0, feats1, use_ransac_verification=self.use_ransac))
+        if hasattr(self.local_model, "score_pair"):
+            return float(self.local_model.score_pair(feats0, feats1, use_ransac=self.use_ransac))
+        raise AttributeError("Local model has no scoring method")
 
     def score_query_against_candidate_rows(self, query_feats, cand_rows: np.ndarray) -> np.ndarray:
         """Scores query features against an array of gallery candidate rows."""

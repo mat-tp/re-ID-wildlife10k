@@ -71,6 +71,7 @@ class ReIDService:
     def search(self, query_vecs, branches, k=5, K=50, tau=None, exclude_row=None, query_img=None, query_row=None):
         """query_vecs: {branch: (1,d)}. Returns dict(verdict, best_score, hits[(identity, score, gallery_row)])."""
         branches = tuple(branches)
+        query_vecs = {b: np.atleast_2d(v) for b, v in query_vecs.items()}
         w, tau_saved = self.settings(branches)
         tau = tau_saved if tau is None else tau
 

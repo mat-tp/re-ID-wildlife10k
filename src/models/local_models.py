@@ -263,6 +263,7 @@ class LocalFeatureMatcher:
         features_query: Dict[str, torch.Tensor],
         features_gallery: Dict[str, torch.Tensor],
         use_ransac_verification: bool = True,
+        **kwargs,
     ) -> float:
         """
         Computes a scalar similarity score for two pre-extracted feature sets.
@@ -276,6 +277,9 @@ class LocalFeatureMatcher:
         Returns:
             Float scalar score representing pairwise match quality.
         """
+        if "use_ransac" in kwargs:
+            use_ransac_verification = bool(kwargs.pop("use_ransac"))
+
         match_result = self.match_features(features_query, features_gallery)
 
         if use_ransac_verification:
@@ -286,6 +290,20 @@ class LocalFeatureMatcher:
             return float(inlier_count)
 
         return float(match_result["num_matches"])
+
+    def score(
+        self,
+        features_query: Dict[str, torch.Tensor],
+        features_gallery: Dict[str, torch.Tensor],
+        use_ransac: Optional[bool] = None,
+        **kwargs,
+    ) -> float:
+        """
+        Computes pairwise similarity score for two pre-extracted feature sets.
+        Supports both score() and compute_pair_score() naming conventions.
+        """
+        ransac_flag = use_ransac if use_ransac is not None else kwargs.get("use_ransac_verification", False)
+        return self.compute_pair_score(features_query, features_gallery, use_ransac_verification=ransac_flag)
 
     def compute_image_similarity(
         self,
@@ -315,7 +333,7 @@ class LocalFeatureMatcher:
     # Backward compatibility method aliases
     extract = extract_features
     match = match_features
-    score_pair = compute_pair_score
+    score_pair = score
 
 
 # Backward compatibility alias
